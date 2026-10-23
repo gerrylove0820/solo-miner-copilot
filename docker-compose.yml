@@ -1,0 +1,23 @@
+# Solo Miner Copilot - runs on your own node. No ports are published:
+# the bot only makes outgoing connections (your miners on the LAN + api.telegram.org).
+services:
+  solo-miner-copilot:
+    build: .
+    image: solo-miner-copilot:local
+    container_name: solo-miner-copilot
+    network_mode: host              # reach miners on your LAN directly (no ports opened)
+    restart: unless-stopped
+    env_file:
+      - .env                        # TELEGRAM_BOT_TOKEN, TELEGRAM_CHAT_ID
+    environment:
+      CONFIG_PATH: /config/config.yaml
+      DATA_DIR: /data
+      TZ: ${TZ:-UTC}
+    volumes:
+      - ./config.yaml:/config/config.yaml:ro
+      - ./data:/data
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"

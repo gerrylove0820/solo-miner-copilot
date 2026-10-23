@@ -1,0 +1,20 @@
+# your private settings / secrets
+.env
+.env.*
+!.env.example
+config.yaml
+config.yaml.*
+
+# runtime state (SQLite history, Telegram offset, legacy owner file)
+data/*
+!data/.gitkeep
+*.sqlite3
+*.sqlite3-*
+find_proxy.txt
+backup-*/
+
+# python / misc
+__pycache__/
+*.pyc
+*.zip
+.DS_Store

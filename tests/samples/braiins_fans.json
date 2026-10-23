@@ -1,0 +1,1 @@
+{"id":1,"STATUS":[{"STATUS":"S","When":1595938455,"Code":202,"Msg":"4 Fan(s)","Description":"BOSminer+ 0.2.0-ea64aec8e"}],"FANS":[{"FAN":0,"ID":0,"RPM":5340,"Speed":100},{"FAN":1,"ID":1,"RPM":4620,"Speed":100},{"FAN":2,"ID":2,"RPM":0,"Speed":100},{"FAN":3,"ID":3,"RPM":0,"Speed":100}]}
