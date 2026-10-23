@@ -1,0 +1,20 @@
+# Accelerated config for dry-run testing against tests/mock_miners.py
+poll_interval_seconds: 2
+request_timeout_seconds: 2
+daily_summary_time: "00:00"
+thresholds:
+  offline_after_failed_polls: 3
+  overheat_cooldown_minutes: 30
+  shares_stall_minutes: 0.15        # 9 s
+  hashrate_baseline_min_minutes: 0.2
+pool: {enabled: true, host: 127.0.0.1, port: 14030, name: Mock pool}
+miners:
+  - {name: Bitaxe-healthy,  type: axeos, host: 127.0.0.1, port: 18001}
+  - {name: Bitaxe-hot,      type: axeos, host: 127.0.0.1, port: 18002}
+  - {name: Bitaxe-dies,     type: axeos, host: 127.0.0.1, port: 18003}
+  - {name: Bitaxe-stalled,  type: axeos, host: 127.0.0.1, port: 18004}
+  - {name: NerdQaxe-137,    type: nerdqaxe, host: 127.0.0.1, port: 18005}
+  - {name: Avalon-Nano3S,   type: avalon, host: 127.0.0.1, port: 14028, temp_max_c: 95}
+  - {name: Avalon-Q,        type: avalon, host: 127.0.0.1, port: 14029, temp_max_c: 85}
+  - {name: Braiins-BMM101,  type: braiins, host: 127.0.0.1, port: 14030, temp_max_c: 110}
+  - {name: Nothing-here,    type: braiins, host: 127.0.0.1, port: 14099, fallback_http_port: 18001}

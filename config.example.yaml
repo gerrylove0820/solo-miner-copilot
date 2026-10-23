@@ -1,0 +1,98 @@
+# Solo Miner Copilot - example settings.
+#   cp config.example.yaml config.yaml     then edit config.yaml
+#   docker compose restart                 after every change
+# Secrets (your Telegram bot token) do NOT go here - they live in .env.
+# config.yaml is in .gitignore, so your real miner list never ends up in git.
+
+poll_interval_seconds: 60          # how often every miner is checked
+timezone: "UTC"                    # IANA name, e.g. America/New_York, Europe/Berlin
+daily_summary_time: "08:00"        # 24h clock, in the timezone above
+request_timeout_seconds: 5
+
+telegram:
+  owner_chat_id: ""                # your chat ID (or set TELEGRAM_CHAT_ID in .env - .env wins)
+                                   # Only this chat can use /status etc. and gets alerts.
+
+electricity:
+  rate_usd_per_kwh: 0.15           # <-- put your real rate here
+  rate_is_default: true            # change to false once you set your real rate
+
+thresholds:
+  offline_after_failed_polls: 3    # 3 missed polls (~3 min) -> OFFLINE alert
+  asic_temp_max_c: 70              # Bitaxe / NerdQAxe ASIC temp limit
+  vr_temp_max_c: 85                # Bitaxe / NerdQAxe voltage-regulator temp limit
+  avalon_temp_max_c: 95            # Avalon chip TMax (Nano 3S normally runs ~85-90C)
+  braiins_temp_max_c: 90           # Braiins OS chip temp
+  temp_recovery_margin_c: 5        # "temp OK again" once this far below the limit
+  overheat_cooldown_minutes: 30    # repeat overheat alert at most every 30 min
+  hashrate_drop_pct: 75            # alert if below 75% of the miner's own 6h median...
+  hashrate_drop_minutes: 10        # ...for 10 minutes
+  hashrate_baseline_hours: 6
+  hashrate_baseline_min_minutes: 60  # need ~1h of history before drop alerts start
+  hashrate_alert_cooldown_minutes: 60
+  shares_stall_minutes: 20         # accepted shares not increasing for 20 min -> alert
+
+network:                            # network difficulty, for solo-block odds in the summary
+  enabled: true
+  mempool_base_url: https://mempool.space   # or your node's mempool app, e.g. http://192.168.1.10:3006
+  refresh_minutes: 60
+
+pool:                               # optional: alert if your local stratum port stops answering
+  enabled: false
+  name: Local pool
+  host: 192.168.1.10                # IP of the machine running your pool / proxy
+  port: 3333
+  api_url: ""                       # optional pool stats URL
+
+retention_days: 8                   # how long history is kept in data/copilot.sqlite3
+
+# type: axeos | nerdqaxe | braiins | avalon | cgminer
+#   axeos    = Bitaxe (AxeOS web API, port 80)
+#   nerdqaxe = NerdQAxe / NerdAxe (AxeOS-style API)
+#   braiins  = Braiins OS / BMM (cgminer-style API, port 4028)
+#   avalon   = Canaan Avalon Nano / Q (cgminer API, port 4028)
+# Optional per-miner keys: port, temp_max_c, vr_temp_max_c, enabled: false,
+#   ps_power_index (avalon), fallback_http_port (cgminer types, default 80)
+# Tip: give your miners fixed IPs (DHCP reservations) in your router.
+miners:
+  - {name: Bitaxe-1,      type: axeos,    host: 192.168.1.50}
+  - {name: NerdQAxe-1,    type: nerdqaxe, host: 192.168.1.51}
+  - {name: Braiins-BMM,   type: braiins,  host: 192.168.1.52, port: 4028}
+  - {name: Avalon-Nano3S, type: avalon,   host: 192.168.1.53, port: 4028, temp_max_c: 95}
+
+# --- pool watch: optional phone-only alerts for friends mining on Braiins Solo ---------
+# WARNING: when enabled, ANY Telegram user who finds your bot can send
+# "/watch <their BTC address>" and get alerts for THEIR OWN Braiins Solo workers.
+# They never see your miners, your config or your LAN. Your node makes the
+# requests to solo.braiins.com for them. Leave this off unless you want that.
+pool_watch:
+  enabled: false
+  poll_seconds: 300                # check every watched address every 5 min
+  request_spacing_seconds: 2       # min gap between Braiins API requests (never lower than 2)
+  max_users: 25                    # max chats allowed to use it
+  max_addresses_per_chat: 3
+  offline_minutes: 20              # no share for 20 min -> worker OFFLINE...
+  offline_confirm_polls: 2         # ...seen on 2 checks in a row
+  drop_pct: 60                     # hashrate below 60% of the worker's own 24h average...
+  drop_confirm_polls: 2            # ...on 2 checks in a row
+  alert_cooldown_minutes: 60
+  best_diff_cooldown_minutes: 60
+  api_down_owner_alert_minutes: 60 # tell YOU if Braiins Solo's API is down > 1 hour
+  daily_summary: true              # daily summary to each watcher (daily_summary_time above)
+  notify_owner_new_user: true      # tell YOU when someone new subscribes
+
+# --- farm proxy: optional Braiins Farm Proxy (pool side) -------------------------------
+# Reads the proxy's Prometheus metrics. Leave urls empty to autodetect;
+# /proxy in Telegram shows what was found. Diagnose with: bash tools/find_proxy.sh
+farm_proxy:
+  enabled: false
+  urls: []                         # e.g. [http://127.0.0.1:9090] or [http://farm-proxy:8080/metrics]
+  poll_seconds: 60
+  expected_connections: 0          # how many miners connect to the proxy; 0 = don't check
+  connection_confirm_polls: 2      # fewer than expected on 2 checks in a row -> alert
+  watch_workers: []                # pool-only miners (no local API), e.g. [heater1]
+  unreachable_alert_minutes: 10    # proxy metrics unreachable this long -> alert
+  upstream_min_pct: 50             # upstream hashrate < 50% of downstream...
+  upstream_alert_minutes: 10       # ...for 10 min -> node / pool problem
+  invalid_max_pct: 5               # invalid shares above 5% (15 min window) on 2 checks -> alert
+  alert_cooldown_minutes: 60

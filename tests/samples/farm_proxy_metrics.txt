@@ -1,0 +1,18 @@
+# SYNTHETIC sample in Prometheus text format, built from metric/label names used by
+# braiins/farm-proxy Grafana dashboards (client_dashboard.json, debug_dashboard.json).
+# HELP FP_subscription_size_to_target_total Number of subscription - receivers to target
+# TYPE FP_subscription_size_to_target_total gauge
+FP_subscription_size_to_target_total{goal="Solo",target="Umbrel node"} 14
+FP_subscription_size_to_target_total{goal="#!!ii-DevFee",target="DevFee"} 1
+# TYPE FP_connections_by_target gauge
+FP_connections_by_target{goal="Solo",target="Umbrel node"} 1
+FP_connections_by_target{goal="#!!ii-DevFee",target="DevFee"} 1
+# TYPE FP_accepted_shares counter
+FP_accepted_shares{category="standard",direction="down",target="Umbrel node"} {DN}
+FP_accepted_shares{category="devfee",direction="down",target="DevFee"} 1000
+FP_accepted_shares{category="standard",direction="up",target="Umbrel node"} {UP}
+FP_rejected_shares{category="standard",direction="down",reason="stale",target="Umbrel node"} {DNREJ}
+FP_rejected_shares{category="standard",direction="up",reason="low_difficulty",target="Umbrel node"} 0
+FP_target_status{target="Umbrel node"} 1
+FP_start_time_ms 1.79e12
+process_resident_memory_bytes 2.3e7

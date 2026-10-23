@@ -1,0 +1,1 @@
+{"id":1,"STATUS":[{"STATUS":"S","When":1595938492,"Code":203,"Msg":"Tuner Status","Description":"BOSminer+ 0.2.0-ea64aec8e"}],"TUNERSTATUS":[{"ApproximateChainPowerConsumption":1344,"ApproximateMinerPowerConsumption":1419,"DynamicPowerScaling":"Disabled","PowerLimit":1420}]}

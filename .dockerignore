@@ -1,0 +1,11 @@
+.git
+data
+.env
+.env.*
+config.yaml
+config.yaml.*
+tests
+*.zip
+__pycache__
+backup-*
+find_proxy.txt

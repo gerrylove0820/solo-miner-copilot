@@ -1,0 +1,34 @@
+# OPTIONAL alternative to docker-compose.yml: only needed if the farm proxy's Prometheus
+# (port 9090) is NOT published on your node, so the bot must join the farm proxy's own
+# docker network to reach http://prometheus:9090 / http://farm-proxy:8080/metrics.
+# Switch on:  bash tools/use_proxynet.sh        Switch back:  bash tools/use_proxynet.sh off
+# (the helper writes COMPOSE_FILE and FARM_PROXY_NETWORK into .env)
+# Miners on your LAN are still reached through the node (normal outgoing traffic).
+services:
+  solo-miner-copilot:
+    build: .
+    image: solo-miner-copilot:local
+    container_name: solo-miner-copilot
+    restart: unless-stopped
+    env_file:
+      - .env
+    environment:
+      CONFIG_PATH: /config/config.yaml
+      DATA_DIR: /data
+      TZ: ${TZ:-UTC}
+    volumes:
+      - ./config.yaml:/config/config.yaml:ro
+      - ./data:/data
+    networks:
+      - default
+      - farmproxy
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
+
+networks:
+  farmproxy:
+    external: true
+    name: ${FARM_PROXY_NETWORK:-farm-proxy_default}

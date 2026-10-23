@@ -1,0 +1,1 @@
+{"id":1,"STATUS":[{"STATUS":"S","When":1595938484,"Code":201,"Msg":"3 Temp(s)","Description":"BOSminer+ 0.2.0-ea64aec8e"}],"TEMPS":[{"Board":81.875,"Chip":104.625,"ID":6,"TEMP":0},{"Board":85.875,"Chip":108.9375,"ID":7,"TEMP":1},{"Board":84.4375,"Chip":105.4375,"ID":8,"TEMP":2}]}
