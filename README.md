@@ -114,7 +114,6 @@ cp .env.example .env
 chmod 600 .env
 ```
 
-Replace `https://github.com/gerrylove0820/solo-miner-copilot.git` with the real repository URL.
 
 The `~/umbrel/home` folder also shows up in the umbrelOS **Files** app under **Home**.
 
