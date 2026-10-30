@@ -384,6 +384,34 @@ This project is not affiliated with Braiins, Canaan, Bitaxe, Umbrel or Telegram.
 
 ---
 
+## Need help setting it up?
+
+Solo Miner Copilot is free, open-source, and self-hosted, and it will stay that way.
+
+If you'd like help getting it running, G&B Services Corp (Florida) offers **optional paid remote setup help** for about **$49–99** (Phase 1). It's available in English or Spanish.
+
+If the free project helped you, tips in BTC are welcome but never expected.
+
+**Coming soon: Copilot Cloud.** This is a hosted pool watch, planned at $3/mo, $30/yr, or $25 lifetime (early-bird). Nothing is promised yet. If you're interested, join the waitlist.
+
+**How to pay:** in BTC (Lightning or on-chain) or in USD by bank transfer (ACH or wire) to G&B Services Corp. Email us to book a session or send a tip, and we'll reply with a fresh invoice or the bank details.
+
+- Contact: info@gandbservicescorp.com
+
+### ¿Necesitas ayuda?
+
+Solo Miner Copilot sigue siendo gratis, de código abierto y autoalojado.
+
+G&B Services Corp (Florida) ofrece **ayuda remota opcional de instalación** por unos **$49–99** (Fase 1), en español o inglés. Si el proyecto te sirvió, las propinas en BTC son bienvenidas.
+
+**Próximamente: Copilot Cloud.** Será un monitoreo de pool alojado por $3/mes, $30/año o $25 de por vida (precio de lanzamiento). Todavía no hay promesas. Únete a la lista de espera.
+
+**Cómo pagar:** en BTC (Lightning u on-chain) o en dólares por transferencia bancaria (ACH o wire) a G&B Services Corp. Escríbenos para reservar una sesión o enviar una propina, y te respondemos con una factura nueva o los datos bancarios.
+
+- Contacto: info@gandbservicescorp.com
+
+---
+
 ## License
 
 MIT, provided without warranty. See [LICENSE](LICENSE).
