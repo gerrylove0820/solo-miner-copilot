@@ -26,6 +26,14 @@ def fmt_temp(t: float | None) -> str:
     return "n/a" if t is None else f"{t:.0f}°C"
 
 
+def fmt_asic_temp(temp_c: float | None, asic_temps: list[float] | None = None) -> str:
+    """One ASIC: '61°C'. Two or more, sensor order: 'ASIC 50/60°C'."""
+    temps = [t for t in (asic_temps or []) if t is not None and t > 0]
+    if len(temps) >= 2:
+        return "ASIC " + "/".join(f"{t:.0f}" for t in temps) + "°C"
+    return fmt_temp(temp_c)
+
+
 def fmt_dur(seconds: float | None) -> str:
     if seconds is None:
         return "n/a"
