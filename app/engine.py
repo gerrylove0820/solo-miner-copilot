@@ -95,18 +95,19 @@ class Monitor:
         for key, val, limit, label in checks:
             if val is None:
                 continue
+            shown = _temp_text(r, key, val)
             k_last, k_hot = f"hot_{key}_last_alert", f"hot_{key}_active"
             if val > limit:
                 if now - float(st.get(k_last, 0)) >= cooldown:
                     again = " (still hot)" if st.get(k_hot) else ""
                     self._send(now, r.name, f"overheat_{key}",
-                               f"🔥 OVERHEAT{again}: {r.name} ({r.host})\n{label} {fmt_temp(val)} "
+                               f"🔥 OVERHEAT{again}: {r.name} ({r.host})\n{label} {shown} "
                                f"> limit {fmt_temp(limit)}. Check airflow / fan ({_fan(r)}).")
                     st[k_last] = now
                 st[k_hot] = True
             elif st.get(k_hot) and val <= limit - margin:
                 self._send(now, r.name, f"cooled_{key}",
-                           f"🧊 Temp OK again: {r.name} {label} {fmt_temp(val)}.")
+                           f"🧊 Temp OK again: {r.name} {label} {shown}.")
                 st[k_hot] = False
 
     # ------------------------------------------------------------ hashrate drop
@@ -180,3 +181,13 @@ class Monitor:
 
 def _fan(r) -> str:
     return f"{r.fan_rpm:.0f} rpm" if r.fan_rpm is not None else "fan n/a"
+
+
+def _temp_text(r, key: str, val: float) -> str:
+    """Alert temperature. Single-chip text stays '72°C'; dual-chip adds each chip."""
+    if key == "asic":
+        temps = [t for t in (getattr(r, "asic_temps", None) or []) if t is not None and t > 0]
+        if len(temps) >= 2:
+            chips = "/".join(f"{t:.0f}" for t in temps)
+            return f"{fmt_temp(val)} (chips {chips}°C)"
+    return fmt_temp(val)
