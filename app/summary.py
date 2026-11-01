@@ -8,7 +8,7 @@ from datetime import datetime, timedelta
 from zoneinfo import ZoneInfo
 
 from .collectors import http_get_json
-from .format import fmt_diff, fmt_dur, fmt_hr, fmt_odds, fmt_power, fmt_temp
+from .format import fmt_asic_temp, fmt_diff, fmt_dur, fmt_hr, fmt_odds, fmt_power, fmt_temp
 
 log = logging.getLogger("summary")
 
@@ -122,7 +122,7 @@ def build_status(readings, cfg: dict, store, now: float | None = None, farm=None
         parts = [fmt_hr(r.hashrate_ghs)]
         if r.expected_ghs and r.hashrate_ghs is not None:
             parts[0] += f" ({100 * r.hashrate_ghs / r.expected_ghs:.0f}%)"
-        t = fmt_temp(r.temp_c)
+        t = fmt_asic_temp(r.temp_c, r.asic_temps)
         if r.vr_temp_c is not None:
             t += f"/VR {fmt_temp(r.vr_temp_c)}"
         parts.append(t)

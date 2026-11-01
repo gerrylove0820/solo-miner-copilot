@@ -39,7 +39,8 @@ class Reading:
     hashrate_ghs: float | None = None  # "smoothed" hashrate used for averages
     hashrate_now_ghs: float | None = None  # short-window hashrate for drop detection
     expected_ghs: float | None = None
-    temp_c: float | None = None        # main ASIC / chip temperature
+    temp_c: float | None = None        # hottest ASIC / chip temperature
+    asic_temps: list[float] = field(default_factory=list)  # per-chip, sensor order
     vr_temp_c: float | None = None     # voltage regulator temperature (AxeOS)
     board_temp_c: float | None = None  # board temperature (Braiins)
     ambient_c: float | None = None     # inlet / ambient (Avalon)
@@ -177,6 +178,31 @@ def tcp_port_open(host: str, port: int, timeout: float) -> bool:
         return False
 
 
+def _axeos_asic_temps(d: dict) -> list[float]:
+    """Per-ASIC temperatures in sensor order.
+
+    ESP-Miner SystemInfo reports `temp` and, on a second sensor, `temp2`.
+    `temp3`..`temp8` are included when present. An `asicTemps` list of live
+    per-chip readings wins over those scalars so an average is not counted
+    twice. Missing, blank, null, or <= 0 means that sensor is absent.
+    """
+    listed = d.get("asicTemps")
+    if isinstance(listed, (list, tuple)):
+        temps = [t for t in (pos(v) for v in listed) if t is not None]
+        if temps:
+            return temps
+    primary = pos(first(d, "temp", "asicTemp", "chipTemp"))
+    temps = [primary] if primary is not None else []
+    for n in range(2, 9):
+        key = f"temp{n}"
+        if key not in d:
+            continue
+        t = pos(d.get(key))
+        if t is not None:
+            temps.append(t)
+    return temps
+
+
 # ----------------------------------------------------------------- AxeOS / NerdQaxe
 def parse_axeos(d: dict, r: Reading) -> Reading:
     """Field names from ESP-Miner openapi.yaml (SystemInfo). All optional."""
@@ -184,7 +210,8 @@ def parse_axeos(d: dict, r: Reading) -> Reading:
     r.hashrate_ghs = num(first(d, "hashRate", "hashrate", "hashRate_10m"))
     r.hashrate_now_ghs = num(first(d, "hashRate_1m", "hashRate", "hashrate"))
     r.expected_ghs = pos(first(d, "expectedHashrate", "expectedHashRate"))
-    r.temp_c = pos(first(d, "temp", "asicTemp", "chipTemp"))
+    r.asic_temps = _axeos_asic_temps(d)
+    r.temp_c = max(r.asic_temps) if r.asic_temps else None
     r.vr_temp_c = pos(first(d, "vrTemp", "vrtemp"))
     r.fan_rpm = num(first(d, "fanrpm", "fanRpm"))
     r.power_w = pos(d.get("power"))

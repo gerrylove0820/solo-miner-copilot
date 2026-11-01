@@ -4,7 +4,7 @@ A self-hosted Telegram alert bot for home and solo Bitcoin miners. It watches yo
 
 Solo Miner Copilot runs as a single Docker container on your own node (such as Umbrel) or on any Linux box with Docker. Every 60 seconds it polls your miners' local APIs and stores their history in SQLite. It sends alerts and on-demand summaries to **your own** Telegram bot.
 
-> **Status:** beta (v1.3.0). See [Project status](#project-status).
+> **Status:** beta (v1.3.1). See [Project status](#project-status).
 
 ---
 
@@ -23,6 +23,7 @@ Your miners, IP addresses and stats stay on your own hardware. You create your o
   - Braiins: 90 °C
   - You can override the limit per miner with `temp_max_c`.
   - Alerts have a 30-minute cooldown. Recovery is reported once the temperature is 5 °C below the limit.
+  - Dual-ASIC Bitaxes use the hotter chip (`temp` and `temp2` from AxeOS). `/status` shows both, for example `ASIC 50/60°C`. The daily summary max is that hotter chip. A missing, zero, or null second temperature is ignored, so single-chip miners are unchanged.
 - **Hashrate drop:** alerts when a miner stays below 75% of its own 6-hour median hashrate for 10 minutes.
 - **Stalled shares:** alerts when a miner has had no new accepted shares for 20 minutes.
 - **New best difficulty:** tells you when a miner sets a new best difficulty.
@@ -376,7 +377,7 @@ The project is written for Python 3.12 and uses only the standard library plus P
 
 ## Project status
 
-**Beta (v1.3.0).** The author has tested it on a small home fleet of Bitaxe, NerdQAxe, Braiins BMM and Avalon devices. Other firmware versions may report fields differently, so some values may be missing or wrong on your hardware.
+**Beta (v1.3.1).** The author has tested it on a small home fleet of Bitaxe, NerdQAxe, Braiins BMM and Avalon devices. Other firmware versions may report fields differently, so some values may be missing or wrong on your hardware.
 
 Bug reports and pull requests are welcome. **Before sharing logs, remove your bot token, IP addresses and BTC addresses.** Never share your `.env`.
 

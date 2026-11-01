@@ -2,7 +2,7 @@ import os
 import tempfile
 import unittest
 
-from app.collectors import Reading
+from app.collectors import Reading, parse_axeos
 from app.config import load_config
 from app.engine import Monitor
 from app.store import Store
@@ -63,6 +63,8 @@ class EngineTests(unittest.TestCase):
     def test_overheat_cooldown(self):
         self.step(self.rd(temp=72))
         self.assertEqual(self.kinds(), ["overheat_asic"])
+        self.assertIn("ASIC/chip temp 72°C", self.msgs[0][2])
+        self.assertNotIn("chips", self.msgs[0][2])
         for _ in range(29):
             self.step(self.rd(temp=73))
         self.assertEqual(self.kinds(), ["overheat_asic"])   # cooldown 30 min
@@ -159,6 +161,62 @@ class EngineTests(unittest.TestCase):
         self.assertIn("AQ: no data", txt)
         st = build_status([self.rd(hr=1000)], self.cfg, self.store, self.t)
         self.assertIn("Online 1/1", st)
+        self.assertIn("max 62°C/VR 50°C", txt)
+        self.assertNotIn("ASIC", txt)
+
+    def _axe(self, payload):
+        return parse_axeos(payload, Reading("B1", "axeos", "192.168.1.53"))
+
+    def test_dual_asic_second_chip_overheat_and_recovery(self):
+        hot = self._axe({"temp": 50, "temp2": 75, "hashRate": 1000, "power": 18})
+        self.step(hot)
+        self.assertEqual(self.kinds(), ["overheat_asic"])
+        self.assertIn("ASIC/chip temp 75°C (chips 50/75°C)", self.msgs[-1][2])
+        self.assertIn("> limit 70°C", self.msgs[-1][2])
+        cool = self._axe({"temp": 48, "temp2": 60, "hashRate": 1000, "power": 18})
+        self.step(cool)
+        self.assertEqual(self.kinds()[-1], "cooled_asic")
+        self.assertIn("60°C (chips 48/60°C)", self.msgs[-1][2])
+
+    def test_dual_asic_under_limit_does_not_alert(self):
+        self.step(self._axe({"temp": 49.9, "temp2": 59.8, "vrTemp": 75, "hashRate": 4400}))
+        self.assertEqual(self.kinds(), [])
+
+    def test_missing_temp2_does_not_change_single_chip_alert(self):
+        self.step(self._axe({"temp": 72, "temp2": 0, "hashRate": 1000}))
+        self.assertEqual(self.kinds(), ["overheat_asic"])
+        self.assertIn("ASIC/chip temp 72°C", self.msgs[-1][2])
+        self.assertNotIn("chips", self.msgs[-1][2])
+
+    def test_status_shows_both_chips_only_when_present(self):
+        dual = self._axe({"temp": 49.9, "temp2": 59.8, "vrTemp": 75, "hashRate": 4400})
+        st = build_status([dual], self.cfg, self.store, self.t)
+        self.assertIn("ASIC 50/60°C/VR 75°C", st)
+        for payload in (
+            {"temp": 61.25, "temp2": 0, "vrTemp": 52, "hashRate": 1000},
+            {"temp": 61.25, "vrTemp": 52, "hashRate": 1000},
+            {"temp": 61.25, "temp2": None, "vrTemp": 52, "hashRate": 1000},
+        ):
+            st = build_status([self._axe(payload)], self.cfg, self.store, self.t)
+            self.assertIn("61°C/VR 52°C", st)
+            self.assertNotIn("ASIC", st)
+        avalon = Reading("AQ", "avalon", "192.168.1.54", ok=True, hashrate_ghs=4000)
+        avalon.temp_c = 94
+        st = build_status([avalon], self.cfg, self.store, self.t)
+        self.assertIn("94°C", st)
+        self.assertNotIn("ASIC", st)
+        nerd = parse_axeos({"temp": 63.5, "vrTemp": 58, "hashRate": 4812.7},
+                           Reading("N", "nerdqaxe", "192.168.1.55"))
+        st = build_status([nerd], self.cfg, self.store, self.t)
+        self.assertIn("64°C/VR 58°C", st)
+        self.assertNotIn("ASIC", st)
+
+    def test_daily_max_uses_hotter_asic(self):
+        self.step(self._axe({"temp": 49.9, "temp2": 59.8, "vrTemp": 76, "hashRate": 4400, "power": 20}))
+        self.step(self._axe({"temp": 55, "temp2": 52, "vrTemp": 70, "hashRate": 4400, "power": 20}))
+        txt = build_daily_summary(self.cfg, self.store, None, self.t)
+        self.assertIn("max 60°C/VR 76°C", txt)
+        self.assertNotIn("ASIC", txt)
 
 
 if __name__ == "__main__":

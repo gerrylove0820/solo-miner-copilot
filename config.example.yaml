@@ -19,7 +19,7 @@ electricity:
 
 thresholds:
   offline_after_failed_polls: 3    # 3 missed polls (~3 min) -> OFFLINE alert
-  asic_temp_max_c: 70              # Bitaxe / NerdQAxe ASIC temp limit
+  asic_temp_max_c: 70              # Bitaxe / NerdQAxe; dual-ASIC uses the hotter chip
   vr_temp_max_c: 85                # Bitaxe / NerdQAxe voltage-regulator temp limit
   avalon_temp_max_c: 95            # Avalon chip TMax (Nano 3S normally runs ~85-90C)
   braiins_temp_max_c: 90           # Braiins OS chip temp
