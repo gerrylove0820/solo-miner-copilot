@@ -4,7 +4,7 @@ A self-hosted Telegram alert bot for home and solo Bitcoin miners. It watches yo
 
 Solo Miner Copilot runs as a single Docker container on your own node (such as Umbrel) or on any Linux box with Docker. Every 60 seconds it polls your miners' local APIs and stores their history in SQLite. It sends alerts and on-demand summaries to **your own** Telegram bot.
 
-> **Status:** beta (v1.3.1). See [Project status](#project-status).
+> **Status:** beta (v1.3.2). See [Project status](#project-status).
 
 ---
 
@@ -377,7 +377,9 @@ The project is written for Python 3.12 and uses only the standard library plus P
 
 ## Project status
 
-**Beta (v1.3.1).** The author has tested it on a small home fleet of Bitaxe, NerdQAxe, Braiins BMM and Avalon devices. Other firmware versions may report fields differently, so some values may be missing or wrong on your hardware.
+**Beta (v1.3.2).** The author has tested it on a small home fleet of Bitaxe, NerdQAxe, Braiins BMM and Avalon devices. Other firmware versions may report fields differently, so some values may be missing or wrong on your hardware.
+
+**v1.3.2.** Daily hashrate averages no longer follow a single wild AxeOS `hashRate` sample. The smoothed 10-minute rate is what gets stored. A clean power-of-ten scale error (about 100x on some higher-hashrate Bitaxes, or MH/s or H/s reported where GH/s is expected) is corrected against that miner's expected hashrate. Samples that are still far above the expected rate, or far above the miner's own recent median, are left out of the average. A real stall is still recorded.
 
 Bug reports and pull requests are welcome. **Before sharing logs, remove your bot token, IP addresses and BTC addresses.** Never share your `.env`.
 

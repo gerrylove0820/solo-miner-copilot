@@ -8,6 +8,8 @@ import statistics
 import threading
 import time
 
+from .collectors import HASHRATE_SUMMARY_FACTOR
+
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS samples (
     ts REAL NOT NULL, miner TEXT NOT NULL, ok INTEGER NOT NULL,
@@ -31,6 +33,38 @@ CREATE TABLE IF NOT EXISTS pw_samples (
 );
 CREATE INDEX IF NOT EXISTS idx_pw_samples_addr_ts ON pw_samples(address, ts);
 """
+
+
+def _hashrate_avgs(rows: list) -> tuple[float | None, float | None]:
+    """(avg while online, avg with downtime as 0) from (ok, hashrate) rows.
+
+    High outliers are left out of the online mean and counted at the median
+    for the fleet (effective) mean, so a spike is a normal minute rather than
+    thousands of TH/s. An online sample with no hashrate (rejected spike, or
+    no stats) is skipped. Offline samples count as 0.
+    """
+    online_vals = [h for ok, h in rows if ok and h is not None]
+    positive = [h for h in online_vals if h > 0]
+    med = statistics.median(positive) if positive else None
+    cap = med * HASHRATE_SUMMARY_FACTOR if med else None
+
+    def outlier(h) -> bool:
+        return cap is not None and h is not None and h > cap
+
+    kept = [h for h in online_vals if not outlier(h)]
+    avg_online = statistics.fmean(kept) if kept else None
+    eff = []
+    for ok, h in rows:
+        if not ok:
+            eff.append(0.0)
+        elif h is None:
+            continue
+        elif outlier(h):
+            eff.append(med)
+        else:
+            eff.append(h)
+    avg_eff = statistics.fmean(eff) if eff else None
+    return avg_online, avg_eff
 
 
 class Store:
@@ -69,21 +103,32 @@ class Store:
         return (statistics.median(vals) if vals else None), len(vals)
 
     def window_stats(self, since: float, until: float | None = None) -> dict:
-        """Aggregate per-miner stats over [since, until]."""
+        """Aggregate per-miner stats over [since, until].
+
+        Hashrate averages ignore samples more than HASHRATE_SUMMARY_FACTOR
+        above that miner's own median. One counter-overflow spike (often
+        ~100x on AxeOS) would otherwise dominate the arithmetic mean. Readings
+        below the median are kept, so a real stall still pulls the average down.
+        """
         until = until or time.time()
         with self._lock:
             rows = self.db.execute(
                 """SELECT miner, COUNT(*), SUM(ok),
-                          AVG(CASE WHEN ok=1 THEN hashrate END),
-                          AVG(CASE WHEN ok=1 THEN COALESCE(hashrate,0) ELSE 0 END),
                           MAX(temp), MAX(vr_temp),
                           AVG(CASE WHEN ok=1 THEN power END),
                           SUM(CASE WHEN ok=1 AND power IS NOT NULL THEN 1 ELSE 0 END),
                           MAX(best_diff), MIN(ts), MAX(ts)
                    FROM samples WHERE ts>=? AND ts<=? GROUP BY miner""",
                 (since, until)).fetchall()
+            hr_rows = self.db.execute(
+                "SELECT miner, ok, hashrate FROM samples WHERE ts>=? AND ts<=? ORDER BY miner, ts",
+                (since, until)).fetchall()
+        by_miner: dict[str, list] = {}
+        for miner, ok, hr in hr_rows:
+            by_miner.setdefault(miner, []).append((ok, hr))
         out = {}
-        for (miner, n, n_ok, hr_online, hr_eff, tmax, vrmax, pw, n_pw, best, t0, t1) in rows:
+        for (miner, n, n_ok, tmax, vrmax, pw, n_pw, best, t0, t1) in rows:
+            hr_online, hr_eff = _hashrate_avgs(by_miner.get(miner, []))
             out[miner] = {
                 "samples": n, "ok_samples": n_ok or 0,
                 "uptime_pct": 100.0 * (n_ok or 0) / n if n else 0.0,

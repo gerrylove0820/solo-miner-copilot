@@ -27,7 +27,8 @@ class ParserTests(unittest.TestCase):
     def test_axeos_full(self):
         r = parse_axeos(load("axeos_info.json"), Reading("b", "axeos", "x"))
         self.assertTrue(r.ok)
-        self.assertAlmostEqual(r.hashrate_ghs, 1162.4)
+        # Smoothed window (hashRate_10m), not the instantaneous hashRate.
+        self.assertAlmostEqual(r.hashrate_ghs, 1170.3)
         self.assertAlmostEqual(r.hashrate_now_ghs, 1150.1)
         self.assertEqual(r.expected_ghs, 1176.0)
         self.assertEqual(r.temp_c, 61.25)
@@ -51,6 +52,8 @@ class ParserTests(unittest.TestCase):
         self.assertIsNone(r.expected_ghs)       # absent
         self.assertAlmostEqual(r.best_diff, 4.29e9)  # string with suffix
         self.assertEqual(r.accepted, 88)        # numeric string
+        self.assertAlmostEqual(r.hashrate_ghs, 512.3)  # only instantaneous field, GH/s
+        self.assertAlmostEqual(r.hashrate_now_ghs, 512.3)
 
     def test_axeos_empty(self):
         r = parse_axeos({}, Reading("b", "axeos", "x"))
@@ -100,6 +103,81 @@ class ParserTests(unittest.TestCase):
         triple = parse_axeos({"temp": 40, "temp2": 0, "temp3": 80}, Reading("b", "axeos", "x"))
         self.assertEqual(triple.asic_temps, [40.0, 80.0])
         self.assertEqual(triple.temp_c, 80.0)
+
+    def test_axeos_prefers_smoothed_window_over_instant_spike(self):
+        # Higher-hashrate Bitaxe: UI 10m/1h stay near expected while hashRate
+        # spikes ~100x (AxeOS register overflow). The stored average must follow
+        # the window, which is what the AxeOS UI shows as the 10m average.
+        r = parse_axeos({
+            "hashRate": 429760,          # ~97.6x expected; would display as 429.76 TH/s
+            "hashRate_1m": 4430,
+            "hashRate_10m": 4430,
+            "hashRate_1h": 4402,
+            "expectedHashrate": 4402,
+        }, Reading("b", "axeos", "x"))
+        self.assertAlmostEqual(r.expected_ghs, 4402)
+        self.assertAlmostEqual(r.hashrate_ghs, 4430)
+        self.assertAlmostEqual(r.hashrate_now_ghs, 4430)
+        self.assertLess(r.hashrate_ghs, 10_000)
+
+    def test_axeos_scales_all_windows_when_unit_is_100x(self):
+        # Same scale on every field: expected stays GH/s, measured fields are
+        # 100x (register scale or a firmware that did not divide down to GH/s).
+        r = parse_axeos({
+            "hashRate": 429760,
+            "hashRate_1m": 443000,
+            "hashRate_10m": 443000,
+            "hashRate_1h": 440200,
+            "expectedHashrate": 4402,
+        }, Reading("b", "axeos", "x"))
+        self.assertAlmostEqual(r.hashrate_ghs, 4430)
+        self.assertAlmostEqual(r.hashrate_now_ghs, 4430)
+
+    def test_axeos_scales_megahash_and_rawhash_reports(self):
+        base = {"expectedHashrate": 1176}
+        mhs = parse_axeos({**base, "hashRate": 1176 * 1_000, "hashRate_10m": 1176 * 1_000},
+                          Reading("b", "axeos", "x"))
+        self.assertAlmostEqual(mhs.hashrate_ghs, 1176)
+        raw = parse_axeos({**base, "hashRate": 1176 * 1_000_000_000},
+                          Reading("b", "axeos", "x"))
+        self.assertAlmostEqual(raw.hashrate_ghs, 1176)
+
+    def test_axeos_drops_non_unit_spike_and_keeps_a_real_stall(self):
+        spiked = parse_axeos({
+            "hashRate": 4402 * 50,       # 50x is not a clean unit factor
+            "expectedHashrate": 4402,
+        }, Reading("b", "axeos", "x"))
+        self.assertIsNone(spiked.hashrate_ghs)
+        # A lone instantaneous reading at a clean 100x is scaled, not dropped.
+        scaled = parse_axeos({"hashRate": 429760, "expectedHashrate": 4402},
+                             Reading("b", "axeos", "x"))
+        self.assertAlmostEqual(scaled.hashrate_ghs, 4297.6)
+        stalled = parse_axeos({
+            "hashRate": 400,             # ~9% of expected: real underperformance
+            "hashRate_1m": 400,
+            "expectedHashrate": 4402,
+        }, Reading("b", "axeos", "x"))
+        self.assertAlmostEqual(stalled.hashrate_ghs, 400)
+        self.assertAlmostEqual(stalled.hashrate_now_ghs, 400)
+        zero = parse_axeos({"hashRate": 0, "hashRate_1m": 0, "expectedHashrate": 4402},
+                           Reading("b", "axeos", "x"))
+        self.assertEqual(zero.hashrate_ghs, 0.0)
+        self.assertEqual(zero.hashrate_now_ghs, 0.0)
+
+    def test_nerdos_expected_from_clock_when_field_missing(self):
+        # NerdOS omits expectedHashrate. 500 MHz * 800 cores * 4 ASICs / 1000 = 1600 GH/s.
+        common = {"frequency": 500, "smallCoreCount": 800, "asicCount": 4}
+        scaled = parse_axeos({**common, "hashRate": 160_000, "hashRate_10m": 160_000},
+                             Reading("n", "nerdqaxe", "x"))
+        self.assertAlmostEqual(scaled.expected_ghs, 1600)
+        self.assertAlmostEqual(scaled.hashrate_ghs, 1600)
+        normal = parse_axeos({**common, "hashRate": 1580}, Reading("n", "nerdqaxe", "x"))
+        self.assertAlmostEqual(normal.hashrate_ghs, 1580)
+        # No asicCount: do not invent an expected rate and do not rescale.
+        untouched = parse_axeos({"frequency": 500, "smallCoreCount": 800, "hashRate": 1600},
+                                Reading("n", "nerdqaxe", "x"))
+        self.assertIsNone(untouched.expected_ghs)
+        self.assertAlmostEqual(untouched.hashrate_ghs, 1600)
 
     def test_fmt_asic_temp(self):
         self.assertEqual(fmt_asic_temp(61.25, [61.25]), "61°C")
