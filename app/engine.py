@@ -9,6 +9,8 @@ import logging
 import time
 from typing import Callable
 
+from .collectors import (HASHRATE_MEDIAN_FACTOR, HASHRATE_MEDIAN_MIN_SAMPLES,
+                          normalize_high_hashrate)
 from .config import miner_thresholds
 from .format import fmt_dur, fmt_hr, fmt_diff, fmt_temp
 
@@ -41,6 +43,7 @@ class Monitor:
     def process(self, readings, now: float | None = None) -> None:
         now = time.time() if now is None else now
         for r in readings:
+            self._guard_hashrate(r, now)
             self.store.add_sample(now, r)
         for r in readings:
             m = self.miners.get(r.name, {"name": r.name, "type": r.kind, "host": r.host})
@@ -109,6 +112,40 @@ class Monitor:
                 self._send(now, r.name, f"cooled_{key}",
                            f"🧊 Temp OK again: {r.name} {label} {shown}.")
                 st[k_hot] = False
+
+    # ------------------------------------------------------------ hashrate guard
+    def _guard_hashrate(self, r, now):
+        """Drop a sample that cannot be this miner's real hashrate.
+
+        Expected-hashrate scaling happens in the AxeOS parser. This pass
+        repeats it for every miner that reports an expected rate (Avalon
+        GHSmm included), then rejects anything still more than
+        HASHRATE_MEDIAN_FACTOR above the miner's own recent median. The
+        median guard stays disarmed until HASHRATE_MEDIAN_MIN_SAMPLES good
+        points exist, so a startup ramp is not treated as the baseline and
+        then used to reject full speed.
+        """
+        if not r.ok:
+            return
+        r.hashrate_ghs = normalize_high_hashrate(r.hashrate_ghs, r.expected_ghs)
+        r.hashrate_now_ghs = normalize_high_hashrate(r.hashrate_now_ghs, r.expected_ghs)
+        if r.hashrate_now_ghs is None:
+            r.hashrate_now_ghs = r.hashrate_ghs
+        since = now - float(self.cfg["thresholds"]["hashrate_baseline_hours"]) * 3600
+        median, n = self.store.hashrate_median(r.name, since)
+        if not median or n < HASHRATE_MEDIAN_MIN_SAMPLES:
+            return
+        cap = median * HASHRATE_MEDIAN_FACTOR
+
+        def clip(value, label):
+            if value is not None and value > cap:
+                log.warning("%s: dropped %s hashrate %.4g GH/s (>%.0fx median %.4g GH/s)",
+                            r.name, label, value, HASHRATE_MEDIAN_FACTOR, median)
+                return None
+            return value
+
+        r.hashrate_ghs = clip(r.hashrate_ghs, "smoothed")
+        r.hashrate_now_ghs = clip(r.hashrate_now_ghs, "short-window")
 
     # ------------------------------------------------------------ hashrate drop
     def _hashrate(self, r, m, st, now):

@@ -11,6 +11,11 @@ Supported types (config.yaml `type:`):
   stratum   - just checks that a TCP port (e.g. the local pool) accepts connections
 
 All hashrates are normalised to GH/s.
+
+AxeOS `hashRate` is the instantaneous register and is the field that spikes
+(counter overflow / unlocked hashrate monitor on some firmware and multi-chip
+boards). The daily average uses the smoothed windows instead, and a reading
+that is a clean power-of-ten above `expectedHashrate` is scaled back to GH/s.
 """
 from __future__ import annotations
 
@@ -178,6 +183,86 @@ def tcp_port_open(host: str, port: int, timeout: float) -> bool:
         return False
 
 
+# A sustained Bitaxe / NerdQAxe does not hash at several times the hashrate the
+# firmware itself expects at the current clock. Anything above this, after a
+# power-of-ten unit correction, is a bad sample and must not enter averages.
+HASHRATE_EXPECTED_FACTOR = 3.0
+# Isolated spikes of ~100x show up against the miner's own recent median.
+# 20x still allows a real recovery from a deep underclock once the guard is armed.
+HASHRATE_MEDIAN_FACTOR = 20.0
+HASHRATE_MEDIAN_MIN_SAMPLES = 20
+# Summary-time trim. Tighter than the ingest guard so one stored spike cannot
+# move the mean, while a real overclock (well under 5x) still counts.
+HASHRATE_SUMMARY_FACTOR = 5.0
+
+# GH/s times these factors are the wrong-unit readings we know how to undo:
+# 10 and 100 cover the register-scale bug seen on some higher-hashrate Bitaxes,
+# 1e3 is MH/s stored as GH/s, 1e6 is kH/s, 1e9 is raw H/s.
+_HASHRATE_SCALE_FACTORS = (10, 100, 1_000, 1_000_000, 1_000_000_000)
+
+
+def axeos_expected_ghs(d: dict) -> float | None:
+    """Expected hashrate in GH/s from an AxeOS / NerdOS system-info payload.
+
+    Official AxeOS sends `expectedHashrate` in GH/s. NerdOS often omits it;
+    the same quantity is frequency(MHz) * smallCoreCount * asicCount / 1000.
+    `smallCoreCount` is per chip, so `asicCount` has to be present too —
+    assuming 1 ASIC on a multi-chip board would invent a false anchor.
+    """
+    reported = pos(first(d, "expectedHashrate", "expectedHashRate"))
+    if reported:
+        return reported
+    freq = pos(first(d, "frequency", "actualFrequency", "freq"))
+    cores = pos(first(d, "smallCoreCount", "small_core_count"))
+    asics = pos(first(d, "asicCount", "asic_count", "chipCount"))
+    if freq and cores and asics:
+        return freq * cores * asics / 1000.0
+    return None
+
+
+def _pos_num(v) -> float | None:
+    f = num(v)
+    return f if f is not None and f > 0 else None
+
+
+def unit_divisor_if_high(value: float, expected: float) -> float:
+    """Divisor that brings an inflated reading back near `expected`, or 1.
+
+    Only scales readings that are already above the expected ceiling. A low
+    reading is a real stall or underclock and must be kept as-is — multiplying
+    it up to "expected" would hide a hashrate drop.
+    """
+    if value <= 0 or expected <= 0 or value <= expected * HASHRATE_EXPECTED_FACTOR:
+        return 1.0
+    best = 1.0
+    best_err = None
+    for factor in _HASHRATE_SCALE_FACTORS:
+        ratio = (value / factor) / expected
+        if 0.6 <= ratio <= 1.6:
+            err = abs(math.log(ratio))
+            if best_err is None or err < best_err:
+                best_err = err
+                best = float(factor)
+    return best
+
+
+def normalize_high_hashrate(value: float | None, expected: float | None) -> float | None:
+    """GH/s sample, or None when it is still impossibly above `expected`.
+
+    `expected` is GH/s (AxeOS expectedHashrate, or the NerdOS clock formula).
+    A value of 0 or less is returned unchanged. With no anchor the value is
+    returned unchanged so legacy payloads that only have `hashRate` keep working.
+    """
+    if value is None:
+        return None
+    if value <= 0 or not expected or expected <= 0:
+        return value
+    scaled = value / unit_divisor_if_high(value, expected)
+    if scaled > expected * HASHRATE_EXPECTED_FACTOR:
+        return None
+    return scaled
+
+
 def _axeos_asic_temps(d: dict) -> list[float]:
     """Per-ASIC temperatures in sensor order.
 
@@ -204,12 +289,59 @@ def _axeos_asic_temps(d: dict) -> list[float]:
 
 
 # ----------------------------------------------------------------- AxeOS / NerdQaxe
+def _axeos_window(d: dict, *keys) -> float | None:
+    """First positive hashrate window. Zero means 'not filled in yet'."""
+    return _pos_num(first(d, *keys))
+
+
 def parse_axeos(d: dict, r: Reading) -> Reading:
-    """Field names from ESP-Miner openapi.yaml (SystemInfo). All optional."""
+    """Field names from ESP-Miner openapi.yaml (SystemInfo). All optional.
+
+    `hashrate_ghs` is the smoothed value used for daily averages. Prefer the
+    firmware's own 10-minute / 1-hour windows over instantaneous `hashRate`,
+    which is the field that spikes to ~100x on some AxeOS builds while the
+    UI's 1m/10m/1h averages stay correct. Each window is scaled down when it
+    is a clean power-of-ten above the expected GH/s rate (MH/s, raw H/s, or
+    the 100x register scale), and dropped when it is still impossible.
+    """
     r.ok = True
-    r.hashrate_ghs = num(first(d, "hashRate", "hashrate", "hashRate_10m"))
-    r.hashrate_now_ghs = num(first(d, "hashRate_1m", "hashRate", "hashrate"))
-    r.expected_ghs = pos(first(d, "expectedHashrate", "expectedHashRate"))
+    r.expected_ghs = axeos_expected_ghs(d)
+    windows = (
+        _axeos_window(d, "hashRate_10m", "hashRate10m", "hashrate10m"),
+        _axeos_window(d, "hashRate_1h", "hashRate1h", "hashrate1h"),
+        _axeos_window(d, "hashRate_1d", "hashRate1d", "hashrate1d"),
+        _axeos_window(d, "hashRate_1m", "hashRate1m", "hashrate1m"),
+        _axeos_window(d, "hashRate", "hashrate"),
+    )
+    smoothed = None
+    for raw in windows:
+        got = normalize_high_hashrate(raw, r.expected_ghs)
+        if got is not None:
+            smoothed = got
+            break
+    if smoothed is None and any(num(d.get(k)) == 0 for k in
+                                ("hashRate", "hashrate", "hashRate_10m", "hashRate_1m")):
+        smoothed = 0.0
+    # 0 is a real "not hashing" reading for drop detection. Only a missing
+    # short window falls through to the smoothed value.
+    now_raw = num(first(d, "hashRate_1m", "hashRate1m", "hashrate1m"))
+    if now_raw is None:
+        now_raw = num(first(d, "hashRate", "hashrate"))
+    if now_raw is not None and now_raw <= 0:
+        now = 0.0
+    else:
+        now = normalize_high_hashrate(now_raw, r.expected_ghs)
+        if now is None:
+            now = smoothed
+    reported = _axeos_window(d, "hashRate", "hashrate", "hashRate_10m", "hashRate_1m")
+    if reported and smoothed is None:
+        log.warning("%s: dropped impossible hashrate %.4g (expected %.4g GH/s)",
+                    r.name, reported, r.expected_ghs)
+    elif reported and smoothed and smoothed < reported / HASHRATE_EXPECTED_FACTOR:
+        log.debug("%s: rescaled hashrate %.4g -> %.4g GH/s (expected %.4g)",
+                  r.name, reported, smoothed, r.expected_ghs)
+    r.hashrate_ghs = smoothed
+    r.hashrate_now_ghs = now
     r.asic_temps = _axeos_asic_temps(d)
     r.temp_c = max(r.asic_temps) if r.asic_temps else None
     r.vr_temp_c = pos(first(d, "vrTemp", "vrtemp"))

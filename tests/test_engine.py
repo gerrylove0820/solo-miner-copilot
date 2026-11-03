@@ -211,6 +211,52 @@ class EngineTests(unittest.TestCase):
         self.assertIn("64°C/VR 58°C", st)
         self.assertNotIn("ASIC", st)
 
+    def test_summary_ignores_stored_hashrate_spikes(self):
+        # Rows already in the DB (previous release stored raw hashRate).
+        # 40 sane samples and 4 spikes at 100x must not average out near 44 TH/s.
+        for i in range(40):
+            self.store.add_sample(self.t + i * 60, self.rd(hr=4400, temp=61, best=1e9))
+        for i in range(4):
+            self.store.add_sample(self.t + (40 + i) * 60, self.rd(hr=4400 * 100, temp=61, best=1e9))
+        txt = build_daily_summary(self.cfg, self.store, None, self.t + 50 * 60)
+        self.assertIn("avg 4.40 TH/s", txt)
+        self.assertNotIn("44.00 TH/s", txt)
+        self.assertNotIn("440.00 TH/s", txt)
+
+    def test_median_guard_drops_spike_but_keeps_a_real_increase(self):
+        for _ in range(40):
+            self.step(self.rd(hr=4400))
+        self.step(self.rd(hr=4400 * 100))
+        row = self.store.db.execute(
+            "SELECT hashrate FROM samples ORDER BY ts DESC LIMIT 1").fetchone()
+        self.assertIsNone(row[0])
+        txt = build_daily_summary(self.cfg, self.store, None, self.t)
+        self.assertIn("avg 4.40 TH/s", txt)
+        self.assertNotIn("440.00 TH/s", txt)
+        self.step(self.rd(hr=8000))  # < 20x the 4400 median: a real step up
+        row = self.store.db.execute(
+            "SELECT hashrate FROM samples ORDER BY ts DESC LIMIT 1").fetchone()
+        self.assertEqual(row[0], 8000)
+
+    def test_daily_summary_uses_corrected_axeos_hashrate(self):
+        payload = {
+            "hashRate": 429760,
+            "hashRate_1m": 4430,
+            "hashRate_10m": 4430,
+            "hashRate_1h": 4402,
+            "expectedHashrate": 4402,
+            "temp": 61,
+            "vrTemp": 76,
+            "power": 64,
+            "bestDiff": "97.72G",
+        }
+        for _ in range(12):
+            self.step(self._axe(payload))
+        txt = build_daily_summary(self.cfg, self.store, None, self.t)
+        self.assertIn("avg 4.43 TH/s", txt)
+        self.assertNotIn("429.76", txt)
+        self.assertIn("max 61°C/VR 76°C", txt)
+
     def test_daily_max_uses_hotter_asic(self):
         self.step(self._axe({"temp": 49.9, "temp2": 59.8, "vrTemp": 76, "hashRate": 4400, "power": 20}))
         self.step(self._axe({"temp": 55, "temp2": 52, "vrTemp": 70, "hashRate": 4400, "power": 20}))
