@@ -4,7 +4,7 @@ A self-hosted Telegram alert bot for home and solo Bitcoin miners. It watches yo
 
 Solo Miner Copilot runs as a single Docker container on your own node (such as Umbrel) or on any Linux box with Docker. Every 60 seconds it polls your miners' local APIs and stores their history in SQLite. It sends alerts and on-demand summaries to **your own** Telegram bot.
 
-> **Status:** beta (v1.3.2). See [Project status](#project-status).
+> **Status:** beta (v1.3.3). See [Project status](#project-status).
 
 ---
 
@@ -32,6 +32,7 @@ Your miners, IP addresses and stats stay on your own hardware. You create your o
   - power use and an electricity cost estimate (`electricity.rate_usd_per_kwh`)
   - your odds of finding a solo block, based on network difficulty from mempool.space. You can point this at your own node's mempool app instead.
 - **On-demand commands:** `/status` and `/summary` from Telegram.
+- **Private LAN status page (optional):** the same snapshot as `/status`, in a phone browser on your home Wi-Fi. Off until you set `STATUS_PAGE_TOKEN`. This is not a push notification.
 - **Optional extras:** Braiins Farm Proxy monitoring, a local stratum port check, and "pool watch" alerts for Braiins Solo users (see [Optional features](#optional-features)).
 
 ---
@@ -56,7 +57,7 @@ These are optional:
 ## Privacy & security
 
 - **Runs on your hardware.** The project runs no third-party server, and there is no telemetry or analytics.
-- **No open ports.** The container publishes no ports and nothing listens. It uses `network_mode: host` only so it can reach the miners on your LAN.
+- **Nothing listens by default.** The container publishes no ports. It uses `network_mode: host` so it can reach the miners on your LAN. The optional status page listens on that machine only after you set `STATUS_PAGE_TOKEN`, and only for your home network. Do not port-forward it.
 - **No webhook and no port forwarding.** The bot talks to Telegram through outbound HTTPS long-polling (`getUpdates`) to `api.telegram.org`.
 - **Your bot token stays local.** It lives only in your local `.env`, which is in `.gitignore`.
   - The token is never logged.
@@ -211,7 +212,7 @@ sudo docker compose run --rm solo-miner-copilot python -m app.main --once --dry-
 
 There are two settings files:
 
-- **`.env`** (copied from `.env.example`): `TELEGRAM_BOT_TOKEN`, `TELEGRAM_CHAT_ID`, `TZ`, `DRY_RUN`, `LOG_LEVEL`
+- **`.env`** (copied from `.env.example`): `TELEGRAM_BOT_TOKEN`, `TELEGRAM_CHAT_ID`, `TZ`, `DRY_RUN`, `LOG_LEVEL`, and optionally `STATUS_PAGE_TOKEN` (private status page; leave it empty to keep the page off)
 - **`config.yaml`** (copied from `config.example.yaml`): your miners and all other settings
 
 **Example miners block:**
@@ -277,6 +278,86 @@ If pool watch is enabled, the owner also has `/users`, `/watch`, `/unwatch` and 
 
 ---
 
+## Private status page (phone on your Wi-Fi)
+
+Telegram stays the way you get alerts, including block-found alerts. This page is an extra way to **look** at the same fleet snapshot as `/status`: miners online, hashrate, temperatures, power, and the farm-proxy lines (connection count and the rest) when that check is on.
+
+The page is **off** until you set a secret. If you skip this section, nothing changes and nothing new listens.
+
+It is for your home network. Do not forward the port on your router. Phone push notifications are not in this version.
+
+**Turn it on** from the install folder (`~/umbrel/home/solo-miner-copilot`):
+
+1. Generate a secret (or type a long random password of your own, at least 16 characters):
+
+   ```bash
+   openssl rand -hex 16
+   ```
+
+2. Open `.env` and add one line, using that secret. This is the password in the link.
+
+   ```bash
+   nano .env
+   ```
+
+   ```
+   STATUS_PAGE_TOKEN=paste-the-secret-here
+   ```
+
+   In `nano`, press **Ctrl+O**, then **Enter**, then **Ctrl+X**.
+
+3. Rebuild:
+
+   ```bash
+   sudo docker compose up -d --build
+   ```
+
+4. Find this machine's address on your home network:
+
+   ```bash
+   hostname -I
+   ```
+
+   Use the first number. That number is `YOUR-UMBREL-IP` in the link below.
+
+5. On the iPhone, join the **same Wi-Fi** (not cellular). Open Safari and go to:
+
+   ```
+   http://YOUR-UMBREL-IP:8787/s/paste-the-secret-here
+   ```
+
+   Replace the address and the secret with yours. The page reloads about once a minute. In Safari you can use **Share → Add to Home Screen**.
+
+The usual Umbrel install uses host networking, so those steps are enough. You do not open a port in Docker.
+
+**Check from the Umbrel terminal** (same secret):
+
+```bash
+curl -fsS "http://127.0.0.1:8787/s/paste-the-secret-here/plain"
+```
+
+You should see the same text Telegram would send for `/status`. The logs should contain `Status page: ON` and must not contain the secret.
+
+**Optional settings.** Leave these out to keep the defaults.
+
+| Variable | Default | Meaning |
+|---|---|---|
+| `STATUS_PAGE_TOKEN` | empty (page off) | Secret in the link. Treat it like a password. |
+| `STATUS_PAGE_PORT` | `8787` | Port on the Umbrel machine. |
+| `STATUS_PAGE_BIND` | `0.0.0.0` | Lets a phone on the home network connect. Set `127.0.0.1` if only the Umbrel machine itself should open the page. |
+
+Anyone on your Wi-Fi who has the link can open the page. Don't share the link.
+
+**Farm-proxy Docker network.** If you switched on `tools/use_proxynet.sh`, the phone cannot see the page until you publish the port. In `docker-compose.proxynet.yml`, uncomment the `ports` block (`8787:8787`), then run:
+
+```bash
+sudo docker compose up -d --build
+```
+
+Do not port-forward 8787. To go back to the normal setup, `bash tools/use_proxynet.sh off`.
+
+---
+
 ## Optional features
 
 ### Pool watch (Braiins Solo)
@@ -325,6 +406,18 @@ If you run Braiins Farm Proxy, enable `farm_proxy` in `config.yaml`. The bot rea
 git pull && sudo docker compose up -d --build
 ```
 
+**Already installed without git** (the Umbrel folder is not a checkout). For v1.3.3, refresh these app files from `main`, then rebuild. `config.yaml`, `.env` and `data/` stay put.
+
+```bash
+cd ~/umbrel/home/solo-miner-copilot
+curl -fsSL -o app/__init__.py https://raw.githubusercontent.com/gerrylove0820/solo-miner-copilot/main/app/__init__.py
+curl -fsSL -o app/main.py https://raw.githubusercontent.com/gerrylove0820/solo-miner-copilot/main/app/main.py
+curl -fsSL -o app/status_page.py https://raw.githubusercontent.com/gerrylove0820/solo-miner-copilot/main/app/status_page.py
+sudo docker compose up -d --build
+```
+
+Then add `STATUS_PAGE_TOKEN` if you want the phone page. See [Private status page](#private-status-page-phone-on-your-wi-fi).
+
 **Stop:**
 
 ```bash
@@ -353,6 +446,7 @@ sudo docker logs --tail 50 solo-miner-copilot
 | Daily summary arrives at the wrong time | Set `timezone` in `config.yaml`. |
 | Farm proxy shows "unavailable" | Run `bash tools/find_proxy.sh`. If needed, then run `bash tools/use_proxynet.sh`. |
 | Permission errors | Use `sudo` with `docker` commands. |
+| Phone can't open the status page | 1. The iPhone must be on the same Wi-Fi, not cellular. 2. `STATUS_PAGE_TOKEN` is one line in `.env`, then `sudo docker compose up -d`. 3. Use the number from `hostname -I` in `http://YOUR-UMBREL-IP:8787/s/your-secret`, not `https`. 4. Logs should say `Status page: ON`. 5. Do not port-forward. If you use the farm-proxy compose file, uncomment its `ports` block. |
 
 ---
 
@@ -377,7 +471,9 @@ The project is written for Python 3.12 and uses only the standard library plus P
 
 ## Project status
 
-**Beta (v1.3.2).** The author has tested it on a small home fleet of Bitaxe, NerdQAxe, Braiins BMM and Avalon devices. Other firmware versions may report fields differently, so some values may be missing or wrong on your hardware.
+**Beta (v1.3.3).** The author has tested it on a small home fleet of Bitaxe, NerdQAxe, Braiins BMM and Avalon devices. Other firmware versions may report fields differently, so some values may be missing or wrong on your hardware.
+
+**v1.3.3.** Optional private status page on your home network. It shows the same snapshot as Telegram `/status` and stays off until you set `STATUS_PAGE_TOKEN`. Telegram alerts are unchanged. Phone push is not included.
 
 **v1.3.2.** Daily hashrate averages no longer follow a single wild AxeOS `hashRate` sample. The smoothed 10-minute rate is what gets stored. A clean power-of-ten scale error (about 100x on some higher-hashrate Bitaxes, or MH/s or H/s reported where GH/s is expected) is corrected against that miner's expected hashrate. Samples that are still far above the expected rate, or far above the miner's own recent median, are left out of the average. A real stall is still recorded.
 

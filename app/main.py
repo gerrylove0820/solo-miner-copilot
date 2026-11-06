@@ -1,4 +1,8 @@
-"""Entry point: poll loop + Telegram command thread + daily summary scheduler."""
+"""Entry point: poll loop + Telegram command thread + daily summary scheduler.
+
+An optional private LAN status page (see status_page.py) starts only when
+STATUS_PAGE_TOKEN is set. Telegram alerts do not depend on it.
+"""
 from __future__ import annotations
 
 import argparse
@@ -17,6 +21,7 @@ from .engine import Monitor
 from .farmproxy import FarmProxy
 from .store import Store
 from .poolwatch import PoolWatch
+from .status_page import StatusPage
 from .summary import build_daily_summary, build_status, daily_slot_due
 from .telegram_bot import TelegramBot
 
@@ -47,6 +52,9 @@ class App:
         if self.farm is not None:
             self.bot.handlers["/proxy"] = self.farm.proxy_text
             self.bot.extra_help = "\n/proxy - Braiins Farm Proxy (pool side): connections, hashrate, invalid %"
+        # Same builder as /status. The page stays off until STATUS_PAGE_TOKEN is set.
+        self.status_page = StatusPage(
+            lambda: build_status(self.snapshot(), cfg, self.store, farm=self.farm))
         self.stop = threading.Event()
         self.poolwatch = None
         if cfg["pool_watch"].get("enabled"):
@@ -85,6 +93,8 @@ class App:
         if not once:
             threading.Thread(target=self.bot.poll_forever, args=(self.store,), daemon=True,
                              name="telegram").start()
+            # A bind failure must not stop Telegram alerts.
+            self.status_page.start()
             if self.farm:
                 threading.Thread(target=self.farm.run_forever, args=(self.stop,), daemon=True,
                                  name="farmproxy").start()
@@ -106,6 +116,7 @@ class App:
             if once:
                 break
             self.stop.wait(max(1.0, interval - (time.time() - started)))
+        self.status_page.stop()
         self.bot.stop()
 
 

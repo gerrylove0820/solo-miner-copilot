@@ -12,6 +12,8 @@ request_timeout_seconds: 5
 telegram:
   owner_chat_id: ""                # your chat ID (or set TELEGRAM_CHAT_ID in .env - .env wins)
                                    # Only this chat can use /status etc. and gets alerts.
+# Optional phone page (same snapshot as /status) is NOT set here.
+# Put STATUS_PAGE_TOKEN in .env. Leave it unset and nothing listens. See the README.
 
 electricity:
   rate_usd_per_kwh: 0.15           # <-- put your real rate here

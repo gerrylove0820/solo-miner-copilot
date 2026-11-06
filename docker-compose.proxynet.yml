@@ -19,6 +19,12 @@ services:
     volumes:
       - ./config.yaml:/config/config.yaml:ro
       - ./data:/data
+    # Private status page: the default compose file uses host networking, so a
+    # phone on your LAN can open it with no ports entry. This file does not.
+    # Uncomment the next two lines only if STATUS_PAGE_TOKEN is set and the
+    # phone should open the page. Do not port-forward 8787.
+    # ports:
+    #   - "8787:8787"
     networks:
       - default
       - farmproxy
