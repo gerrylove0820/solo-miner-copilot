@@ -6,9 +6,9 @@ listens, so existing installs keep working with Telegram only.
 The page is for a phone on the same home network. It is not published in
 docker-compose, and it should not be port-forwarded to the internet.
 
-Phone push (ntfy, OneSignal, and similar) is intentionally not implemented.
-Call snapshot_text() from a future notifier so it stays the same report as
-this page and /status.
+This page is not phone push. iOS will not deliver web push from a LAN HTTP
+page. Phone alerts, when enabled, go out through ntfy.sh (see ntfy.py) and
+use their own short text, not this page and not the Telegram message.
 """
 from __future__ import annotations
 

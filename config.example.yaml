@@ -14,6 +14,9 @@ telegram:
                                    # Only this chat can use /status etc. and gets alerts.
 # Optional phone page (same snapshot as /status) is NOT set here.
 # Put STATUS_PAGE_TOKEN in .env. Leave it unset and nothing listens. See the README.
+# Optional phone push is also NOT set here. Put NTFY_TOPIC in .env. Leave it unset
+# and nothing is sent to ntfy.sh. Phone text does not include miner IP addresses.
+# A best share is not a confirmed block. Accepted-block detection is not available.
 
 electricity:
   rate_usd_per_kwh: 0.15           # <-- put your real rate here

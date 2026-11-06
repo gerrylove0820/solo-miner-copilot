@@ -4,7 +4,7 @@ A self-hosted Telegram alert bot for home and solo Bitcoin miners. It watches yo
 
 Solo Miner Copilot runs as a single Docker container on your own node (such as Umbrel) or on any Linux box with Docker. Every 60 seconds it polls your miners' local APIs and stores their history in SQLite. It sends alerts and on-demand summaries to **your own** Telegram bot.
 
-> **Status:** beta (v1.3.3). See [Project status](#project-status).
+> **Status:** beta (v1.3.4). See [Project status](#project-status).
 
 ---
 
@@ -26,13 +26,14 @@ Your miners, IP addresses and stats stay on your own hardware. You create your o
   - Dual-ASIC Bitaxes use the hotter chip (`temp` and `temp2` from AxeOS). `/status` shows both, for example `ASIC 50/60°C`. The daily summary max is that hotter chip. A missing, zero, or null second temperature is ignored, so single-chip miners are unchanged.
 - **Hashrate drop:** alerts when a miner stays below 75% of its own 6-hour median hashrate for 10 minutes.
 - **Stalled shares:** alerts when a miner has had no new accepted shares for 20 minutes.
-- **New best difficulty:** tells you when a miner sets a new best difficulty.
+- **New best share:** tells you when a miner reports a higher share difficulty than before. That is a share record, not a confirmed block.
 - **Daily summary** at `daily_summary_time` (default 08:00 in your configured timezone). It includes:
   - total fleet hashrate
   - power use and an electricity cost estimate (`electricity.rate_usd_per_kwh`)
   - your odds of finding a solo block, based on network difficulty from mempool.space. You can point this at your own node's mempool app instead.
-- **On-demand commands:** `/status` and `/summary` from Telegram.
-- **Private LAN status page (optional):** the same snapshot as `/status`, in a phone browser on your home Wi-Fi. Off until you set `STATUS_PAGE_TOKEN`. This is not a push notification.
+- **On-demand commands:** `/status`, `/summary`, and `/testpush` from Telegram.
+- **Private LAN status page (optional):** the same snapshot as `/status`, in a phone browser on your home Wi-Fi. Off until you set `STATUS_PAGE_TOKEN`. This page cannot push to an iPhone.
+- **Phone push (optional):** the same miner alerts, through the free ntfy app. Off until you set `NTFY_TOPIC`. The phone text leaves out LAN addresses and wallets. See [Phone push](#phone-push-ntfy).
 - **Optional extras:** Braiins Farm Proxy monitoring, a local stratum port check, and "pool watch" alerts for Braiins Solo users (see [Optional features](#optional-features)).
 
 ---
@@ -69,6 +70,7 @@ These are optional:
 - **Other outbound connections:**
   - **mempool.space**, for network difficulty. To avoid it, set `network.enabled: false` or point `mempool_base_url` at your own node.
   - **solo.braiins.com**, only if you enable `pool_watch`.
+  - **ntfy.sh**, only if you set `NTFY_TOPIC`. The phone message is a short line (miner name and the numbers for that alert). It is sent over HTTPS. It does not include miner LAN addresses, wallet addresses, your bot token, or the status-page link. The topic name is a password: anyone who knows it can read those alerts. ntfy.sh is run by someone else. Leave `NTFY_TOPIC` empty and nothing is sent.
 - **Telegram sees your messages.** Telegram can read the contents of the messages your bot sends you. That's how all Telegram bots work.
 - **Read the code.** It's short. A good place to start is `app/telegram_bot.py`.
 
@@ -212,7 +214,7 @@ sudo docker compose run --rm solo-miner-copilot python -m app.main --once --dry-
 
 There are two settings files:
 
-- **`.env`** (copied from `.env.example`): `TELEGRAM_BOT_TOKEN`, `TELEGRAM_CHAT_ID`, `TZ`, `DRY_RUN`, `LOG_LEVEL`, and optionally `STATUS_PAGE_TOKEN` (private status page; leave it empty to keep the page off)
+- **`.env`** (copied from `.env.example`): `TELEGRAM_BOT_TOKEN`, `TELEGRAM_CHAT_ID`, `TZ`, `DRY_RUN`, `LOG_LEVEL`, and optionally `STATUS_PAGE_TOKEN` (private status page) and `NTFY_TOPIC` (phone push). Leave those two empty to keep both extras off.
 - **`config.yaml`** (copied from `config.example.yaml`): your miners and all other settings
 
 **Example miners block:**
@@ -272,6 +274,7 @@ These commands only work from the configured owner chat. Messages from any other
 | `/status` | Snapshot of your fleet right now |
 | `/summary` | Summary of the last 24 hours (same as the daily report) |
 | `/proxy` | Farm proxy status. Only available when `farm_proxy` is enabled. |
+| `/testpush` | Send one test alert to your phone. Works only after `NTFY_TOPIC` is set. |
 | `/help` | List of commands |
 
 If pool watch is enabled, the owner also has `/users`, `/watch`, `/unwatch` and `/mystatus`.
@@ -280,11 +283,11 @@ If pool watch is enabled, the owner also has `/users`, `/watch`, `/unwatch` and 
 
 ## Private status page (phone on your Wi-Fi)
 
-Telegram stays the way you get alerts, including block-found alerts. This page is an extra way to **look** at the same fleet snapshot as `/status`: miners online, hashrate, temperatures, power, and the farm-proxy lines (connection count and the rest) when that check is on.
+Telegram stays the way you get alerts. This page is an extra way to **look** at the same fleet snapshot as `/status`: miners online, hashrate, temperatures, power, and the farm-proxy lines (connection count and the rest) when that check is on.
 
 The page is **off** until you set a secret. If you skip this section, nothing changes and nothing new listens.
 
-It is for your home network. Do not forward the port on your router. Phone push notifications are not in this version.
+It is for your home network. Do not forward the port on your router. Opening this page does not send a push to an iPhone. Phone alerts use the ntfy app, below.
 
 **Turn it on** from the install folder (`~/umbrel/home/solo-miner-copilot`):
 
@@ -358,6 +361,99 @@ Do not port-forward 8787. To go back to the normal setup, `bash tools/use_proxyn
 
 ---
 
+## Phone push (ntfy)
+
+Telegram stays the alert channel. Phone push is an extra copy of the **local miner** alerts: offline, back online, high temperature, temperature normal, hashrate drop, hashrate recovered, shares stalled, shares flowing, and a new best share.
+
+It is **off** until you set a topic. If you skip this section, nothing is sent to ntfy and Telegram is unchanged.
+
+The phone message is a short line: the miner **name** and the numbers for that alert (temperature, hashrate, share difficulty). It does not include the miner’s LAN address, a wallet, your bot token, or the status-page link. It is not the same text Telegram sends.
+
+A new best share is a share record. This app does **not** send “block found” or “the network accepted your block.” AxeOS can count a local candidate when a share meets network difficulty. That count is not used here, because the network may not have accepted it. Confirming an accepted block would need a chain or pool source this app does not read yet.
+
+Pool-watch messages and farm-proxy messages stay on Telegram only.
+
+**What you install on the phone.** No account and no payment.
+
+- **iPhone:** install **ntfy** from the App Store. It is free. The current app needs iOS 15 or later. Allow notifications. In the app, subscribe to your topic on the server `ntfy.sh` (that is the default server). Instant delivery works because ntfy.sh is connected to Apple’s push service. The LAN status page cannot do this.
+- **Android:** install **ntfy** from Google Play or from F-Droid. Both are free. Subscribe to the same topic on `ntfy.sh`. The Play app uses Firebase for ntfy.sh. The F-Droid app does not use Firebase; it keeps its own connection.
+
+**Privacy.** Those short alerts are sent to `https://ntfy.sh`, which is run by someone else. The topic is the password. Anyone who knows it can read the alerts. Use a long random topic and do not share it. Paid ntfy plans exist; you do not need one for this.
+
+**Turn it on** from the install folder (`~/umbrel/home/solo-miner-copilot`, which is `/home/umbrel/umbrel/home/solo-miner-copilot` for the `umbrel` user). One command at a time.
+
+If this folder is not a git checkout, copy the v1.3.4 app files first:
+
+```bash
+cd ~/umbrel/home/solo-miner-copilot
+```
+
+```bash
+curl -fsSL -o app/__init__.py https://raw.githubusercontent.com/gerrylove0820/solo-miner-copilot/main/app/__init__.py
+```
+
+```bash
+curl -fsSL -o app/main.py https://raw.githubusercontent.com/gerrylove0820/solo-miner-copilot/main/app/main.py
+```
+
+```bash
+curl -fsSL -o app/engine.py https://raw.githubusercontent.com/gerrylove0820/solo-miner-copilot/main/app/engine.py
+```
+
+```bash
+curl -fsSL -o app/ntfy.py https://raw.githubusercontent.com/gerrylove0820/solo-miner-copilot/main/app/ntfy.py
+```
+
+If you use git instead, update the code with:
+
+```bash
+git pull
+```
+
+Then, either way:
+
+1. Make a topic. Copy the line it prints. That is `YOUR-NTFY-TOPIC`.
+
+   ```bash
+   openssl rand -hex 16
+   ```
+
+2. Open `.env`.
+
+   ```bash
+   nano .env
+   ```
+
+   Add one line, using what the previous command printed:
+
+   ```
+   NTFY_TOPIC=YOUR-NTFY-TOPIC
+   ```
+
+   Press **Ctrl+O**, then **Enter**, then **Ctrl+X**.
+
+3. Rebuild:
+
+   ```bash
+   sudo docker compose up -d --build
+   ```
+
+4. On the phone, subscribe to `YOUR-NTFY-TOPIC` on server `ntfy.sh`.
+
+5. In Telegram, as the owner, send:
+
+   ```
+   /testpush
+   ```
+
+   You should get a test alert with no miner data. Logs may say `Phone push: ON over HTTPS`. They must not contain the topic.
+
+No new Python packages. The app still uses the standard library plus PyYAML.
+
+Leave `NTFY_URL` unset. It defaults to `https://ntfy.sh`. A non-HTTPS address is ignored and push stays off.
+
+---
+
 ## Optional features
 
 ### Pool watch (Braiins Solo)
@@ -406,17 +502,33 @@ If you run Braiins Farm Proxy, enable `farm_proxy` in `config.yaml`. The bot rea
 git pull && sudo docker compose up -d --build
 ```
 
-**Already installed without git** (the Umbrel folder is not a checkout). For v1.3.3, refresh these app files from `main`, then rebuild. `config.yaml`, `.env` and `data/` stay put.
+**Already installed without git** (the Umbrel folder is not a checkout). For v1.3.4, refresh these app files from `main`, then rebuild. `config.yaml`, `.env` and `data/` stay put. There are no new Python packages.
 
 ```bash
 cd ~/umbrel/home/solo-miner-copilot
+```
+
+```bash
 curl -fsSL -o app/__init__.py https://raw.githubusercontent.com/gerrylove0820/solo-miner-copilot/main/app/__init__.py
+```
+
+```bash
 curl -fsSL -o app/main.py https://raw.githubusercontent.com/gerrylove0820/solo-miner-copilot/main/app/main.py
-curl -fsSL -o app/status_page.py https://raw.githubusercontent.com/gerrylove0820/solo-miner-copilot/main/app/status_page.py
+```
+
+```bash
+curl -fsSL -o app/engine.py https://raw.githubusercontent.com/gerrylove0820/solo-miner-copilot/main/app/engine.py
+```
+
+```bash
+curl -fsSL -o app/ntfy.py https://raw.githubusercontent.com/gerrylove0820/solo-miner-copilot/main/app/ntfy.py
+```
+
+```bash
 sudo docker compose up -d --build
 ```
 
-Then add `STATUS_PAGE_TOKEN` if you want the phone page. See [Private status page](#private-status-page-phone-on-your-wi-fi).
+Then add `NTFY_TOPIC` if you want phone alerts. See [Phone push](#phone-push-ntfy). `STATUS_PAGE_TOKEN` is unchanged if you already set it.
 
 **Stop:**
 
@@ -447,6 +559,7 @@ sudo docker logs --tail 50 solo-miner-copilot
 | Farm proxy shows "unavailable" | Run `bash tools/find_proxy.sh`. If needed, then run `bash tools/use_proxynet.sh`. |
 | Permission errors | Use `sudo` with `docker` commands. |
 | Phone can't open the status page | 1. The iPhone must be on the same Wi-Fi, not cellular. 2. `STATUS_PAGE_TOKEN` is one line in `.env`, then `sudo docker compose up -d`. 3. Use the number from `hostname -I` in `http://YOUR-UMBREL-IP:8787/s/your-secret`, not `https`. 4. Logs should say `Status page: ON`. 5. Do not port-forward. If you use the farm-proxy compose file, uncomment its `ports` block. |
+| No phone push alert | 1. `NTFY_TOPIC` is set, then `sudo docker compose up -d`. 2. The ntfy app is subscribed to that topic on `ntfy.sh`. 3. Send `/testpush` from your Telegram chat. 4. The status page does not deliver iPhone notifications. |
 
 ---
 
@@ -471,9 +584,11 @@ The project is written for Python 3.12 and uses only the standard library plus P
 
 ## Project status
 
-**Beta (v1.3.3).** The author has tested it on a small home fleet of Bitaxe, NerdQAxe, Braiins BMM and Avalon devices. Other firmware versions may report fields differently, so some values may be missing or wrong on your hardware.
+**Beta (v1.3.4).** The author has tested it on a small home fleet of Bitaxe, NerdQAxe, Braiins BMM and Avalon devices. Other firmware versions may report fields differently, so some values may be missing or wrong on your hardware.
 
-**v1.3.3.** Optional private status page on your home network. It shows the same snapshot as Telegram `/status` and stays off until you set `STATUS_PAGE_TOKEN`. Telegram alerts are unchanged. Phone push is not included.
+**v1.3.4.** Optional phone push through the free ntfy app (`NTFY_TOPIC`). The phone gets a short alert without miner LAN addresses. Telegram is unchanged and still works if push is off or ntfy fails. A best share is labeled as a share, not a confirmed block. Accepted-block detection is not included.
+
+**v1.3.3.** Optional private status page on your home network. It shows the same snapshot as Telegram `/status` and stays off until you set `STATUS_PAGE_TOKEN`. Telegram alerts are unchanged. The page is not phone push.
 
 **v1.3.2.** Daily hashrate averages no longer follow a single wild AxeOS `hashRate` sample. The smoothed 10-minute rate is what gets stored. A clean power-of-ten scale error (about 100x on some higher-hashrate Bitaxes, or MH/s or H/s reported where GH/s is expected) is corrected against that miner's expected hashrate. Samples that are still far above the expected rate, or far above the miner's own recent median, are left out of the average. A real stall is still recorded.
 

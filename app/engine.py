@@ -13,15 +13,19 @@ from .collectors import (HASHRATE_MEDIAN_FACTOR, HASHRATE_MEDIAN_MIN_SAMPLES,
                           normalize_high_hashrate)
 from .config import miner_thresholds
 from .format import fmt_dur, fmt_hr, fmt_diff, fmt_temp
+from .ntfy import (msg_best_share, msg_cooled, msg_hashrate_drop, msg_hashrate_ok,
+                   msg_offline, msg_overheat, msg_recovered, msg_shares_ok, msg_shares_stalled)
 
 log = logging.getLogger("engine")
 
 
 class Monitor:
-    def __init__(self, cfg: dict, store, notify: Callable[[str, str, str | None], None]):
+    def __init__(self, cfg: dict, store, notify: Callable[[str, str, str | None], None],
+                 phone: Callable[[str, str, str | None], None] | None = None):
         self.cfg = cfg
         self.store = store
         self.notify = notify
+        self.phone = phone
         self.miners = {m["name"]: m for m in cfg["miners"]}
         self.states: dict[str, dict] = {}
 
@@ -34,10 +38,17 @@ class Monitor:
     def save(self, name: str) -> None:
         self.store.set(f"state:{name}", self.states[name])
 
-    def _send(self, now: float, miner: str | None, kind: str, text: str) -> None:
+    def _send(self, now: float, miner: str | None, kind: str, text: str,
+              phone_text: str | None = None) -> None:
         log.info("ALERT [%s] %s: %s", kind, miner, text.replace("\n", " | "))
         self.store.log_alert(now, miner, kind, text)
         self.notify(text, kind, miner)
+        # Phone text is built without the host. A ntfy failure must not undo Telegram.
+        if phone_text and self.phone:
+            try:
+                self.phone(phone_text, kind, miner)
+            except Exception:  # noqa: BLE001
+                log.warning("phone push hook failed for kind=%s", kind)
 
     # ------------------------------------------------------------ main
     def process(self, readings, now: float | None = None) -> None:
@@ -69,7 +80,8 @@ class Monitor:
             if st.get("offline_alerted"):
                 down = now - st.get("offline_since", now)
                 self._send(now, r.name, "recovered",
-                           f"✅ BACK ONLINE: {label} is responding again (down ~{fmt_dur(down)}).")
+                           f"✅ BACK ONLINE: {label} is responding again (down ~{fmt_dur(down)}).",
+                           msg_recovered(r.name, down))
             st["fail_count"] = 0
             st["offline_alerted"] = False
             st.pop("offline_since", None)
@@ -84,7 +96,8 @@ class Monitor:
             what = "Pool port is not accepting connections" if r.kind == "stratum" else "Not responding"
             self._send(now, r.name, "offline",
                        f"🔴 OFFLINE: {label}\n{what} for {st['fail_count']} polls in a row.{seen}\n"
-                       f"Error: {r.error or 'unknown'}")
+                       f"Error: {r.error or 'unknown'}",
+                       msg_offline(r.name, st["fail_count"], r.kind == "stratum"))
             st["offline_alerted"] = True
 
     # ------------------------------------------------------------ temps
@@ -105,12 +118,14 @@ class Monitor:
                     again = " (still hot)" if st.get(k_hot) else ""
                     self._send(now, r.name, f"overheat_{key}",
                                f"🔥 OVERHEAT{again}: {r.name} ({r.host})\n{label} {shown} "
-                               f"> limit {fmt_temp(limit)}. Check airflow / fan ({_fan(r)}).")
+                               f"> limit {fmt_temp(limit)}. Check airflow / fan ({_fan(r)}).",
+                               msg_overheat(r.name, label, shown, limit, bool(st.get(k_hot))))
                     st[k_last] = now
                 st[k_hot] = True
             elif st.get(k_hot) and val <= limit - margin:
                 self._send(now, r.name, f"cooled_{key}",
-                           f"🧊 Temp OK again: {r.name} {label} {shown}.")
+                           f"🧊 Temp OK again: {r.name} {label} {shown}.",
+                           msg_cooled(r.name, label, shown))
                 st[k_hot] = False
 
     # ------------------------------------------------------------ hashrate guard
@@ -169,13 +184,15 @@ class Monitor:
                 pct = 100.0 * cur / median if median else 0
                 self._send(now, r.name, "hashrate_drop",
                            f"📉 HASHRATE DROP: {r.name} ({r.host})\nNow {fmt_hr(cur)} = {pct:.0f}% of its "
-                           f"6h median {fmt_hr(median)} for {fmt_dur(now - st['drop_since'])}.")
+                           f"6h median {fmt_hr(median)} for {fmt_dur(now - st['drop_since'])}.",
+                           msg_hashrate_drop(r.name, cur, pct, median, now - st["drop_since"]))
                 st["drop_alerted"] = True
                 st["drop_last_alert"] = now
         else:
             if st.get("drop_alerted"):
                 self._send(now, r.name, "hashrate_ok",
-                           f"📈 Hashrate recovered: {r.name} at {fmt_hr(cur)} (median {fmt_hr(median)}).")
+                           f"📈 Hashrate recovered: {r.name} at {fmt_hr(cur)} (median {fmt_hr(median)}).",
+                           msg_hashrate_ok(r.name, cur, median))
             st.pop("drop_since", None)
             st["drop_alerted"] = False
 
@@ -187,7 +204,8 @@ class Monitor:
         if last is None or r.accepted != last:
             if last is not None and r.accepted > last and st.get("stall_alerted"):
                 self._send(now, r.name, "shares_ok",
-                           f"✅ Shares flowing again: {r.name} (accepted {r.accepted}).")
+                           f"✅ Shares flowing again: {r.name} (accepted {r.accepted}).",
+                           msg_shares_ok(r.name))
             st["last_accepted"] = r.accepted
             st["accepted_changed_at"] = now
             st["stall_alerted"] = False
@@ -198,7 +216,8 @@ class Monitor:
             self._send(now, r.name, "shares_stalled",
                        f"⚠️ HASHING BUT NOT SUBMITTING: {r.name} ({r.host})\nAccepted shares stuck at "
                        f"{r.accepted} for {fmt_dur(now - st['accepted_changed_at'])} while hashing at "
-                       f"{fmt_hr(r.hashrate_ghs)}. Check pool connection / stratum settings.")
+                       f"{fmt_hr(r.hashrate_ghs)}. Check pool connection / stratum settings.",
+                       msg_shares_stalled(r.name, r.hashrate_ghs))
             st["stall_alerted"] = True
 
     # ------------------------------------------------------------ best diff
@@ -212,7 +231,8 @@ class Monitor:
         if r.best_diff > rec * 1.000001:
             self._send(now, r.name, "best_diff",
                        f"🏆 NEW BEST DIFFICULTY: {r.name} hit {fmt_diff(r.best_diff)} "
-                       f"(previous record {fmt_diff(rec)}). Keep swinging!")
+                       f"(previous record {fmt_diff(rec)}). Keep swinging!",
+                       msg_best_share(r.name, r.best_diff, rec))
             st["best_diff_record"] = r.best_diff
 
 
