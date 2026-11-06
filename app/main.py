@@ -1,7 +1,8 @@
 """Entry point: poll loop + Telegram command thread + daily summary scheduler.
 
 An optional private LAN status page (see status_page.py) starts only when
-STATUS_PAGE_TOKEN is set. Telegram alerts do not depend on it.
+STATUS_PAGE_TOKEN is set. Optional ntfy phone alerts start only when
+NTFY_TOPIC is set. Telegram alerts do not depend on either one.
 """
 from __future__ import annotations
 
@@ -20,6 +21,7 @@ from .config import load_config
 from .engine import Monitor
 from .farmproxy import FarmProxy
 from .store import Store
+from .ntfy import NtfyClient, settings_from_env
 from .poolwatch import PoolWatch
 from .status_page import StatusPage
 from .summary import build_daily_summary, build_status, daily_slot_due
@@ -38,7 +40,9 @@ class App:
         self.store = Store(os.path.join(data_dir, "copilot.sqlite3"))
         self.bot = TelegramBot(os.environ.get("TELEGRAM_BOT_TOKEN"), data_dir,
                                os.environ.get("TELEGRAM_CHAT_ID") or (cfg.get("telegram") or {}).get("owner_chat_id"), dry_run=dry_run)
-        self.monitor = Monitor(cfg, self.store, lambda text, kind, miner: self.bot.send(text))
+        self.ntfy = NtfyClient(settings_from_env())
+        self.monitor = Monitor(cfg, self.store, lambda text, kind, miner: self.bot.send(text),
+                               phone=self.ntfy.send_alert)
         self.latest: list = []
         self.latest_lock = threading.Lock()
         self.pool = ThreadPoolExecutor(max_workers=max(4, min(32, len(cfg["miners"]))))
@@ -52,6 +56,8 @@ class App:
         if self.farm is not None:
             self.bot.handlers["/proxy"] = self.farm.proxy_text
             self.bot.extra_help = "\n/proxy - Braiins Farm Proxy (pool side): connections, hashrate, invalid %"
+        self.bot.handlers["/testpush"] = self.ntfy.send_test
+        self.bot.extra_help += "\n/testpush - send a test alert to your phone"
         # Same builder as /status. The page stays off until STATUS_PAGE_TOKEN is set.
         self.status_page = StatusPage(
             lambda: build_status(self.snapshot(), cfg, self.store, farm=self.farm))
@@ -93,8 +99,9 @@ class App:
         if not once:
             threading.Thread(target=self.bot.poll_forever, args=(self.store,), daemon=True,
                              name="telegram").start()
-            # A bind failure must not stop Telegram alerts.
+            # A bind failure or a ntfy failure must not stop Telegram alerts.
             self.status_page.start()
+            self.ntfy.start()
             if self.farm:
                 threading.Thread(target=self.farm.run_forever, args=(self.stop,), daemon=True,
                                  name="farmproxy").start()
@@ -117,6 +124,7 @@ class App:
                 break
             self.stop.wait(max(1.0, interval - (time.time() - started)))
         self.status_page.stop()
+        self.ntfy.stop()
         self.bot.stop()
 
 
