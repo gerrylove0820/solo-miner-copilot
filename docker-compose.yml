@@ -1,11 +1,15 @@
-# Solo Miner Copilot - runs on your own node. No ports are published:
-# the bot only makes outgoing connections (your miners on the LAN + api.telegram.org).
+# Solo Miner Copilot - runs on your own node. No ports are published.
+# The bot makes outgoing connections (your miners on the LAN + api.telegram.org).
+# Optional private status page: set STATUS_PAGE_TOKEN in .env. The app then listens
+# on this host at STATUS_PAGE_PORT (default 8787) because of network_mode: host.
+# That is for a phone on your LAN. Do not port-forward it. Leave the token unset
+# and nothing listens.
 services:
   solo-miner-copilot:
     build: .
     image: solo-miner-copilot:local
     container_name: solo-miner-copilot
-    network_mode: host              # reach miners on your LAN directly (no ports opened)
+    network_mode: host              # reach miners on the LAN; optional status page listens here too
     restart: unless-stopped
     env_file:
       - .env                        # TELEGRAM_BOT_TOKEN, TELEGRAM_CHAT_ID
