@@ -1,2 +1,2 @@
 """Solo Miner Copilot - LAN Bitcoin miner monitor with Telegram alerts."""
-__version__ = "1.3.4"
+__version__ = "1.3.5"

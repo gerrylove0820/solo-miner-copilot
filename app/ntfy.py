@@ -53,6 +53,9 @@ _TITLES = {
     "shares_stalled": "Shares stalled",
     "shares_ok": "Shares flowing",
     "best_diff": "New best share",
+    "block_active": "Payout block in chain",
+    "block_reorg": "Payout block left the chain",
+    "block_settled": "Payout block still in chain",
 }
 _PRIORITY = {
     "offline": 4,
@@ -66,6 +69,9 @@ _PRIORITY = {
     "cooled_vr": 3,
     "hashrate_ok": 3,
     "shares_ok": 3,
+    "block_active": 5,
+    "block_reorg": 4,
+    "block_settled": 3,
 }
 _RETRY_CODES = {408, 429, 500, 502, 503, 504}
 

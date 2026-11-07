@@ -16,7 +16,8 @@ telegram:
 # Put STATUS_PAGE_TOKEN in .env. Leave it unset and nothing listens. See the README.
 # Optional phone push is also NOT set here. Put NTFY_TOPIC in .env. Leave it unset
 # and nothing is sent to ntfy.sh. Phone text does not include miner IP addresses.
-# A best share is not a confirmed block. Accepted-block detection is not available.
+# A best share is not a confirmed block. Payout-block alerts are optional and
+# configured only in .env (BLOCK_WATCH, node RPC, public payout address).
 
 electricity:
   rate_usd_per_kwh: 0.15           # <-- put your real rate here
