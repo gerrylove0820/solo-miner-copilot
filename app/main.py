@@ -16,6 +16,7 @@ import time
 from concurrent.futures import ThreadPoolExecutor
 
 from . import __version__
+from .blockwatch import BlockWatch, chains_from_env
 from .collectors import collect
 from .config import load_config
 from .engine import Monitor
@@ -58,6 +59,8 @@ class App:
             self.bot.extra_help = "\n/proxy - Braiins Farm Proxy (pool side): connections, hashrate, invalid %"
         self.bot.handlers["/testpush"] = self.ntfy.send_test
         self.bot.extra_help += "\n/testpush - send a test alert to your phone"
+        # Confirmed payout blocks. Off unless BLOCK_WATCH is set. Does not change miner alerts.
+        self.blocks = BlockWatch(self.store, self.bot.send, self.ntfy.send_alert, chains_from_env())
         # Same builder as /status. The page stays off until STATUS_PAGE_TOKEN is set.
         self.status_page = StatusPage(
             lambda: build_status(self.snapshot(), cfg, self.store, farm=self.farm))
@@ -102,6 +105,11 @@ class App:
             # A bind failure or a ntfy failure must not stop Telegram alerts.
             self.status_page.start()
             self.ntfy.start()
+            if self.blocks.enabled:
+                threading.Thread(target=self.blocks.run_forever, args=(self.stop,), daemon=True,
+                                 name="blockwatch").start()
+            else:
+                self.blocks.start_log()
             if self.farm:
                 threading.Thread(target=self.farm.run_forever, args=(self.stop,), daemon=True,
                                  name="farmproxy").start()

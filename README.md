@@ -4,7 +4,7 @@ A self-hosted Telegram alert bot for home and solo Bitcoin miners. It watches yo
 
 Solo Miner Copilot runs as a single Docker container on your own node (such as Umbrel) or on any Linux box with Docker. Every 60 seconds it polls your miners' local APIs and stores their history in SQLite. It sends alerts and on-demand summaries to **your own** Telegram bot.
 
-> **Status:** beta (v1.3.4). See [Project status](#project-status).
+> **Status:** beta (v1.3.5). See [Project status](#project-status).
 
 ---
 
@@ -34,6 +34,7 @@ Your miners, IP addresses and stats stay on your own hardware. You create your o
 - **On-demand commands:** `/status`, `/summary`, and `/testpush` from Telegram.
 - **Private LAN status page (optional):** the same snapshot as `/status`, in a phone browser on your home Wi-Fi. Off until you set `STATUS_PAGE_TOKEN`. This page cannot push to an iPhone.
 - **Phone push (optional):** the same miner alerts, through the free ntfy app. Off until you set `NTFY_TOPIC`. The phone text leaves out LAN addresses and wallets. See [Phone push](#phone-push-ntfy).
+- **Confirmed payout blocks (optional):** a block on the active chain whose coinbase pays an address you configure. Off until you set `BLOCK_WATCH=1`. This is not a best-share alert and it does not name which miner found it. See [Confirmed payout blocks](#confirmed-payout-blocks).
 - **Optional extras:** Braiins Farm Proxy monitoring, a local stratum port check, and "pool watch" alerts for Braiins Solo users (see [Optional features](#optional-features)).
 
 ---
@@ -71,6 +72,7 @@ These are optional:
   - **mempool.space**, for network difficulty. To avoid it, set `network.enabled: false` or point `mempool_base_url` at your own node.
   - **solo.braiins.com**, only if you enable `pool_watch`.
   - **ntfy.sh**, only if you set `NTFY_TOPIC`. The phone message is a short line (miner name and the numbers for that alert). It is sent over HTTPS. It does not include miner LAN addresses, wallet addresses, your bot token, or the status-page link. The topic name is a password: anyone who knows it can read those alerts. ntfy.sh is run by someone else. Leave `NTFY_TOPIC` empty and nothing is sent.
+  - **Your own node RPC**, only if you set `BLOCK_WATCH=1`. The app asks that node for new blocks and compares the coinbase with your payout address on the machine. The address is not sent to a pool or an explorer. The RPC password stays in `.env` and is not logged.
 - **Telegram sees your messages.** Telegram can read the contents of the messages your bot sends you. That's how all Telegram bots work.
 - **Read the code.** It's short. A good place to start is `app/telegram_bot.py`.
 
@@ -214,7 +216,7 @@ sudo docker compose run --rm solo-miner-copilot python -m app.main --once --dry-
 
 There are two settings files:
 
-- **`.env`** (copied from `.env.example`): `TELEGRAM_BOT_TOKEN`, `TELEGRAM_CHAT_ID`, `TZ`, `DRY_RUN`, `LOG_LEVEL`, and optionally `STATUS_PAGE_TOKEN` (private status page) and `NTFY_TOPIC` (phone push). Leave those two empty to keep both extras off.
+- **`.env`** (copied from `.env.example`): `TELEGRAM_BOT_TOKEN`, `TELEGRAM_CHAT_ID`, `TZ`, `DRY_RUN`, `LOG_LEVEL`, and optionally `STATUS_PAGE_TOKEN` (private status page), `NTFY_TOPIC` (phone push), and `BLOCK_WATCH` (payout-block alerts). Leave the optional ones empty to keep those extras off.
 - **`config.yaml`** (copied from `config.example.yaml`): your miners and all other settings
 
 **Example miners block:**
@@ -454,6 +456,82 @@ Leave `NTFY_URL` unset. It defaults to `https://ntfy.sh`. A non-HTTPS address is
 
 ---
 
+## Confirmed payout blocks
+
+This is separate from a best share. A best share is only a difficulty record from the miner. AxeOS `blockFound` means the miner built a share that met network difficulty. Neither one means the network kept the block.
+
+A confirmed alert here means: **your own node** has this block on its **active mainnet chain**, and the **coinbase** (the block reward transaction, not a later payment in the same block) pays a public address you configured.
+
+That is a fleet payout. It does **not** say which miner, Avalon, or Antminer found it. Braiins Farm Proxy metrics in this app do not include a per-worker accepted block. The proxy is not the source.
+
+**BTC and BCH are separate.** Point `BTC_NODE_RPC_URL` at your Bitcoin node (the Umbrel node behind the farm proxy). Point `BCH_NODE_RPC_URL` at a Bitcoin Cash node you run. The app checks a known post-fork block hash so a Bitcoin node is not treated as Bitcoin Cash, and the other way around.
+
+BCH miners pointed at solopool.org are **not** queried on solopool.org. That site would receive your address and still would not name the ASIC. A block they find still appears on the Bitcoin Cash chain. You need a Bitcoin Cash node’s RPC for that alert. If you do not run one, BCH block alerts stay off. That is the missing piece for BCH.
+
+**What “confirmed” means.** The first alert is “in the active chain” with the node’s confirmation count, usually 1 when the block is new. The text says it is **not final**. A reorg can replace a recent block. If the hash leaves the active chain, you get one “left the active chain” alert. After 6 confirmations you get one “still in the active chain” note. Six confirmations are not a promise the block can never be replaced.
+
+The first time the node is synced, the current tip is a baseline. Older blocks, including ones you found before turning this on, are not announced. While the node is still downloading the chain, nothing is announced.
+
+Alerts go to Telegram and, if phone push is on, to ntfy. The phone text has the chain, height, and block hash. It does not include the payout address, the RPC password, or a miner LAN address. The block hash is public.
+
+**Turn it on** from `~/umbrel/home/solo-miner-copilot` (`/home/umbrel/umbrel/home/solo-miner-copilot`). One command at a time. Skip this if you do not want it. Miner alerts, the status page, and ntfy keep working either way.
+
+If this folder is not a git checkout, copy the v1.3.5 files first:
+
+```bash
+cd ~/umbrel/home/solo-miner-copilot
+```
+
+```bash
+curl -fsSL -o app/__init__.py https://raw.githubusercontent.com/gerrylove0820/solo-miner-copilot/main/app/__init__.py
+```
+
+```bash
+curl -fsSL -o app/main.py https://raw.githubusercontent.com/gerrylove0820/solo-miner-copilot/main/app/main.py
+```
+
+```bash
+curl -fsSL -o app/blockwatch.py https://raw.githubusercontent.com/gerrylove0820/solo-miner-copilot/main/app/blockwatch.py
+```
+
+```bash
+curl -fsSL -o app/ntfy.py https://raw.githubusercontent.com/gerrylove0820/solo-miner-copilot/main/app/ntfy.py
+```
+
+If you use git:
+
+```bash
+git pull
+```
+
+Then edit `.env`. Use the public payout address, never a seed or private key.
+
+```bash
+nano .env
+```
+
+Add lines like these, with your own values. `http://127.0.0.1:8332` is the usual Bitcoin Core port when the node is on this same machine. If the log says the node is unreachable, that port is not open to the copilot container. Do not guess another address.
+
+```
+BLOCK_WATCH=1
+BTC_NODE_RPC_URL=http://127.0.0.1:8332
+BTC_NODE_RPC_USER=YOUR-RPC-USER
+BTC_NODE_RPC_PASSWORD=YOUR-RPC-PASSWORD
+BTC_PAYOUT_ADDRESSES=YOUR-BTC-PAYOUT-ADDRESS
+```
+
+For Bitcoin Cash, add the same kind of lines with the `BCH_` prefix only if you run a Bitcoin Cash node. Press **Ctrl+O**, then **Enter**, then **Ctrl+X**.
+
+```bash
+sudo docker compose up -d --build
+```
+
+No new Python packages. Logs say `Block watch: ON for BTC` and a baseline height. They do not print the payout address or the RPC password.
+
+There is no test command that pretends a block was found.
+
+---
+
 ## Optional features
 
 ### Pool watch (Braiins Solo)
@@ -502,7 +580,7 @@ If you run Braiins Farm Proxy, enable `farm_proxy` in `config.yaml`. The bot rea
 git pull && sudo docker compose up -d --build
 ```
 
-**Already installed without git** (the Umbrel folder is not a checkout). For v1.3.4, refresh these app files from `main`, then rebuild. `config.yaml`, `.env` and `data/` stay put. There are no new Python packages.
+**Already installed without git** (the Umbrel folder is not a checkout). For v1.3.5, refresh these app files from `main`, then rebuild. `config.yaml`, `.env` and `data/` stay put. There are no new Python packages.
 
 ```bash
 cd ~/umbrel/home/solo-miner-copilot
@@ -517,7 +595,7 @@ curl -fsSL -o app/main.py https://raw.githubusercontent.com/gerrylove0820/solo-m
 ```
 
 ```bash
-curl -fsSL -o app/engine.py https://raw.githubusercontent.com/gerrylove0820/solo-miner-copilot/main/app/engine.py
+curl -fsSL -o app/blockwatch.py https://raw.githubusercontent.com/gerrylove0820/solo-miner-copilot/main/app/blockwatch.py
 ```
 
 ```bash
@@ -528,7 +606,7 @@ curl -fsSL -o app/ntfy.py https://raw.githubusercontent.com/gerrylove0820/solo-m
 sudo docker compose up -d --build
 ```
 
-Then add `NTFY_TOPIC` if you want phone alerts. See [Phone push](#phone-push-ntfy). `STATUS_PAGE_TOKEN` is unchanged if you already set it.
+Block alerts stay off until you set `BLOCK_WATCH`. See [Confirmed payout blocks](#confirmed-payout-blocks). Phone push and the status page are unchanged if you already set them.
 
 **Stop:**
 
@@ -560,6 +638,7 @@ sudo docker logs --tail 50 solo-miner-copilot
 | Permission errors | Use `sudo` with `docker` commands. |
 | Phone can't open the status page | 1. The iPhone must be on the same Wi-Fi, not cellular. 2. `STATUS_PAGE_TOKEN` is one line in `.env`, then `sudo docker compose up -d`. 3. Use the number from `hostname -I` in `http://YOUR-UMBREL-IP:8787/s/your-secret`, not `https`. 4. Logs should say `Status page: ON`. 5. Do not port-forward. If you use the farm-proxy compose file, uncomment its `ports` block. |
 | No phone push alert | 1. `NTFY_TOPIC` is set, then `sudo docker compose up -d`. 2. The ntfy app is subscribed to that topic on `ntfy.sh`. 3. Send `/testpush` from your Telegram chat. 4. The status page does not deliver iPhone notifications. |
+| No payout-block alert | 1. `BLOCK_WATCH=1`, a public payout address, and the node RPC user and password are in `.env`. 2. The node is synced (`initialblockdownload` is false). 3. Blocks found before the baseline height are not announced. 4. BCH needs your own Bitcoin Cash node. solopool.org is not queried. |
 
 ---
 
@@ -584,9 +663,11 @@ The project is written for Python 3.12 and uses only the standard library plus P
 
 ## Project status
 
-**Beta (v1.3.4).** The author has tested it on a small home fleet of Bitaxe, NerdQAxe, Braiins BMM and Avalon devices. Other firmware versions may report fields differently, so some values may be missing or wrong on your hardware.
+**Beta (v1.3.5).** The author has tested it on a small home fleet of Bitaxe, NerdQAxe, Braiins BMM and Avalon devices. Other firmware versions may report fields differently, so some values may be missing or wrong on your hardware.
 
-**v1.3.4.** Optional phone push through the free ntfy app (`NTFY_TOPIC`). The phone gets a short alert without miner LAN addresses. Telegram is unchanged and still works if push is off or ntfy fails. A best share is labeled as a share, not a confirmed block. Accepted-block detection is not included.
+**v1.3.5.** Optional confirmed payout-block alerts from your own Bitcoin or Bitcoin Cash node. A match is a coinbase on the active chain paying your configured address. It does not name a miner. The first synced tip is a baseline. Reorgs get a follow-up. Off unless `BLOCK_WATCH=1`.
+
+**v1.3.4.** Optional phone push through the free ntfy app (`NTFY_TOPIC`). The phone gets a short alert without miner LAN addresses. Telegram is unchanged and still works if push is off or ntfy fails. A best share is labeled as a share, not a confirmed block.
 
 **v1.3.3.** Optional private status page on your home network. It shows the same snapshot as Telegram `/status` and stays off until you set `STATUS_PAGE_TOKEN`. Telegram alerts are unchanged. The page is not phone push.
 
