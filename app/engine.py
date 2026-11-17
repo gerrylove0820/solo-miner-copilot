@@ -14,9 +14,22 @@ from .collectors import (HASHRATE_MEDIAN_FACTOR, HASHRATE_MEDIAN_MIN_SAMPLES,
 from .config import miner_thresholds
 from .format import fmt_dur, fmt_hr, fmt_diff, fmt_temp
 from .ntfy import (msg_best_share, msg_cooled, msg_hashrate_drop, msg_hashrate_ok,
-                   msg_offline, msg_overheat, msg_recovered, msg_shares_ok, msg_shares_stalled)
+                   msg_offline, msg_overheat, msg_recovered, msg_shares_ok,
+                   msg_shares_stalled, msg_shares_stalled_fleet)
 
 log = logging.getLogger("engine")
+
+# Share-stall window. The configured minutes stay the floor, so a fast miner
+# still alerts at 20 minutes. The gap is an EWMA of seconds between accepted-
+# counter increases; the window opens to 8x that gap and never past 6 hours.
+# New keys are written into the existing per-miner state blob — no migration.
+_SHARE_GAP_ALPHA = 0.3
+_SHARE_GAP_FACTOR = 8.0
+_STALL_CAP_S = 6 * 3600.0
+_FLEET_WINDOW_S = 15 * 60.0
+_FLEET_MIN_COUNT = 3
+_FLEET_MIN_FRACTION = 0.25
+_FLEET_STATE_KEY = "stall_fleet"
 
 
 class Monitor:
@@ -71,6 +84,10 @@ class Monitor:
             except Exception:  # noqa: BLE001
                 log.exception("alert evaluation failed for %s", r.name)
             self.save(r.name)
+        try:
+            self._flush_share_stalls(now)
+        except Exception:  # noqa: BLE001
+            log.exception("share-stall flush failed")
 
     # ------------------------------------------------------------ offline
     def _offline(self, r, m, st, now):
@@ -202,23 +219,151 @@ class Monitor:
             return
         last = st.get("last_accepted")
         if last is None or r.accepted != last:
-            if last is not None and r.accepted > last and st.get("stall_alerted"):
-                self._send(now, r.name, "shares_ok",
-                           f"✅ Shares flowing again: {r.name} (accepted {r.accepted}).",
-                           msg_shares_ok(r.name))
-            st["last_accepted"] = r.accepted
-            st["accepted_changed_at"] = now
-            st["stall_alerted"] = False
+            self._accepted_changed(r, st, now, last)
             return
-        stall = float(self.cfg["thresholds"]["shares_stall_minutes"]) * 60
+        window = self._stall_window_s(m, st)
+        frozen = now - float(st.get("accepted_changed_at", now))
         hashing = (r.hashrate_ghs or 0) > 0 or (r.hashrate_now_ghs or 0) > 0
-        if hashing and not st.get("stall_alerted") and now - float(st.get("accepted_changed_at", now)) >= stall:
-            self._send(now, r.name, "shares_stalled",
-                       f"⚠️ HASHING BUT NOT SUBMITTING: {r.name} ({r.host})\nAccepted shares stuck at "
-                       f"{r.accepted} for {fmt_dur(now - st['accepted_changed_at'])} while hashing at "
-                       f"{fmt_hr(r.hashrate_ghs)}. Check pool connection / stratum settings.",
-                       msg_shares_stalled(r.name, r.hashrate_ghs))
-            st["stall_alerted"] = True
+        if hashing and frozen >= window:
+            # Remember the crossing time. The fleet pass decides whether this
+            # becomes its own alert or part of one fleet alert.
+            st["stall_at"] = float(st.get("stall_at") or now)
+            st["stall_msg"] = {
+                "host": r.host,
+                "accepted": r.accepted,
+                "frozen_for": frozen,
+                "rate": _stall_rate(r),
+                "rejected": _rejected_since(st, r.rejected),
+            }
+        elif not st.get("stall_alerted"):
+            st.pop("stall_at", None)
+            st.pop("stall_msg", None)
+
+    def _accepted_changed(self, r, st, now, last):
+        """A new accepted count ends a stall. A decrease restarts the timer.
+
+        The interval is a share gap only when the counter went up. A reboot or
+        pool switch drops the counter; that jump is not a gap, and the next
+        increase is not one either (it includes the downtime).
+        """
+        if last is not None and r.accepted > last and st.get("stall_alerted"):
+            self._send(now, r.name, "shares_ok",
+                       f"✅ Shares flowing again: {r.name} (accepted {r.accepted}).",
+                       msg_shares_ok(r.name))
+        if last is not None and r.accepted > last and not st.get("share_gap_skip"):
+            changed = st.get("accepted_changed_at")
+            if changed is not None:
+                _learn_share_gap(st, now - float(changed))
+        if last is not None and r.accepted < last:
+            st["share_gap_skip"] = True
+        else:
+            st.pop("share_gap_skip", None)
+        st["last_accepted"] = r.accepted
+        st["accepted_changed_at"] = now
+        st["rejected_at_accept"] = r.rejected
+        st["stall_alerted"] = False
+        st.pop("stall_at", None)
+        st.pop("stall_msg", None)
+
+    def _stall_window_s(self, miner: dict, st: dict) -> float:
+        """Per-miner override, otherwise max(configured, 8x learned gap), max 6h."""
+        override = miner.get("shares_stall_minutes") if isinstance(miner, dict) else None
+        if override is not None and override != "":
+            return max(0.0, float(override)) * 60.0
+        base = float(self.cfg["thresholds"]["shares_stall_minutes"]) * 60.0
+        gap = st.get("share_gap_s")
+        if not gap or float(gap) <= 0:
+            return min(base, _STALL_CAP_S)
+        learned = _SHARE_GAP_FACTOR * float(gap)
+        return min(max(base, learned), _STALL_CAP_S)
+
+    def _tracked_share_states(self) -> dict:
+        """Miners we have an accepted counter for. That is the fleet denominator."""
+        names = [n for n, m in self.miners.items() if str(m.get("type")) != "stratum"]
+        for name in self.states:
+            if name not in names:
+                names.append(name)
+        found = {}
+        for name in names:
+            if name in self.states:
+                st = self.states[name]
+            else:
+                st = self.store.get(f"state:{name}", None)
+                if not st:
+                    continue
+                self.states[name] = st
+            if st.get("last_accepted") is None:
+                continue
+            found[name] = st
+        return found
+
+    def _flush_share_stalls(self, now: float) -> None:
+        """One fleet alert when several miners stall together, else one each."""
+        tracked = self._tracked_share_states()
+        if not tracked:
+            return
+        recent = []
+        pending_old = []
+        for name, st in tracked.items():
+            stall_at = st.get("stall_at")
+            if stall_at is None:
+                continue
+            if now - float(stall_at) <= _FLEET_WINDOW_S:
+                recent.append(name)
+            elif not st.get("stall_alerted"):
+                pending_old.append(name)
+        pending_recent = [name for name in recent if not tracked[name].get("stall_alerted")]
+        fleet = (len(recent) >= _FLEET_MIN_COUNT
+                 and len(recent) / len(tracked) >= _FLEET_MIN_FRACTION)
+        if fleet and pending_recent:
+            if not self._fleet_incident_open(now, recent, tracked):
+                self._send_fleet_stall(sorted(recent), now)
+                self.store.set(_FLEET_STATE_KEY, {"ts": now, "miners": sorted(recent)})
+            for name in pending_recent:
+                tracked[name]["stall_alerted"] = True
+                self.save(name)
+        elif pending_recent:
+            for name in pending_recent:
+                self._send_one_stall(name, tracked[name], now)
+        for name in pending_old:
+            self._send_one_stall(name, tracked[name], now)
+
+    def _fleet_incident_open(self, now: float, names: list, tracked: dict) -> bool:
+        """True when a fleet alert for this same outage already went out."""
+        prev = self.store.get(_FLEET_STATE_KEY) or {}
+        ts = float(prev.get("ts") or 0)
+        if now - ts > _FLEET_WINDOW_S:
+            return False
+        prev_names = list(prev.get("miners") or [])
+        if not (set(prev_names) & set(names)):
+            return False
+        # Recovered miners cleared stall_at. A later stall is a new incident.
+        return any((tracked.get(n) or {}).get("stall_at") for n in prev_names)
+
+    def _send_fleet_stall(self, names: list, now: float) -> None:
+        listed = ", ".join(names)
+        text = (
+            f"⚠️ MANY MINERS NOT SUBMITTING: {listed}\n"
+            f"{len(names)} miners are hashing but not submitting accepted shares, "
+            f"within 15 minutes of each other. "
+            f"A shared cause is likely: pool, Farm Proxy, node or network."
+        )
+        self._send(now, None, "shares_stalled_fleet", text, msg_shares_stalled_fleet(names))
+
+    def _send_one_stall(self, name: str, st: dict, now: float) -> None:
+        info = st.get("stall_msg") or {}
+        rate = info.get("rate")
+        rejected = info.get("rejected")
+        extra = _rejected_clause(rejected)
+        host = info.get("host", "")
+        text = (
+            f"⚠️ HASHING BUT NOT SUBMITTING: {name} ({host})\n"
+            f"Accepted shares stuck at {info.get('accepted')} for {fmt_dur(info.get('frozen_for'))} "
+            f"while hashing at {fmt_hr(rate)}.{extra} Check pool connection / stratum settings."
+        )
+        self._send(now, name, "shares_stalled", text, msg_shares_stalled(name, rate, rejected))
+        st["stall_alerted"] = True
+        self.save(name)
 
     # ------------------------------------------------------------ best diff
     def _best(self, r, m, st, now):
@@ -234,6 +379,44 @@ class Monitor:
                        f"(previous record {fmt_diff(rec)}). Keep swinging!",
                        msg_best_share(r.name, r.best_diff, rec))
             st["best_diff_record"] = r.best_diff
+
+
+def _stall_rate(r):
+    """1-minute rate. Fall back to the smoothed rate, which prefers 10 minutes.
+
+    A present 1-minute reading is used even when it is zero. Treating zero as
+    missing is what let a stale 10-minute or 1-hour window overstate the rate.
+    """
+    if r.hashrate_now_ghs is not None:
+        return r.hashrate_now_ghs
+    return r.hashrate_ghs
+
+
+def _learn_share_gap(st: dict, interval: float) -> None:
+    if interval <= 0:
+        return
+    prev = st.get("share_gap_s")
+    if prev is None or float(prev) <= 0:
+        st["share_gap_s"] = float(interval)
+        return
+    st["share_gap_s"] = (_SHARE_GAP_ALPHA * float(interval)
+                         + (1.0 - _SHARE_GAP_ALPHA) * float(prev))
+
+
+def _rejected_since(st: dict, rejected) -> int | None:
+    """Rejected shares since the accepted counter last moved. None if unknown."""
+    base = st.get("rejected_at_accept")
+    if rejected is None or base is None:
+        return None
+    return max(0, int(rejected) - int(base))
+
+
+def _rejected_clause(rejected) -> str:
+    if rejected is None:
+        return ""
+    n = int(rejected)
+    word = "share" if n == 1 else "shares"
+    return f" {n} {word} rejected since then."
 
 
 def _fan(r) -> str:

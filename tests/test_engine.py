@@ -264,6 +264,207 @@ class EngineTests(unittest.TestCase):
         self.assertIn("max 60°C/VR 76°C", txt)
         self.assertNotIn("ASIC", txt)
 
+    def test_slow_miner_learns_gap_and_does_not_alert_repeatedly(self):
+        # No learned gap yet, so the first long wait still uses the 20 min floor.
+        self.step(self.rd(acc=10), dt=60)
+        for _ in range(19):
+            self.step(self.rd(acc=10))
+        self.assertNotIn("shares_stalled", self.kinds())
+        self.step(self.rd(acc=10))
+        self.assertEqual(self.kinds().count("shares_stalled"), 1)
+        # The share lands 45 min after the counter froze. That gap is learned,
+        # 8x it is 6 h, and the cap holds the window there.
+        self.step(self.rd(acc=11), dt=25 * 60)
+        self.assertEqual(self.kinds()[-1], "shares_ok")
+        gap = self.store.get("state:B1")["share_gap_s"]
+        self.assertAlmostEqual(gap, 45 * 60, delta=1)
+        # A new process must see the same gap. The key is just another field
+        # on the existing per-miner state blob.
+        self.mon = Monitor(self.cfg, self.store, lambda t, k, m: self.msgs.append((k, m, t)))
+        self.step(self.rd(acc=11), dt=45 * 60)
+        self.assertEqual(self.kinds().count("shares_stalled"), 1)
+        self.step(self.rd(acc=12), dt=60)
+        self.step(self.rd(acc=12), dt=5 * 3600)
+        self.assertEqual(self.kinds().count("shares_stalled"), 1)
+        self.step(self.rd(acc=12), dt=2 * 3600)
+        self.assertEqual(self.kinds().count("shares_stalled"), 2)
+        self.step(self.rd(acc=12), dt=3600)
+        self.assertEqual(self.kinds().count("shares_stalled"), 2)
+
+    def test_fast_miner_still_alerts_at_20_min(self):
+        self.step(self.rd(acc=1))
+        for n in range(2, 16):
+            self.step(self.rd(acc=n))
+        gap = self.store.get("state:B1")["share_gap_s"]
+        self.assertLess(gap * 8, 20 * 60)
+        for _ in range(19):
+            self.step(self.rd(acc=15))
+        self.assertNotIn("shares_stalled", self.kinds())
+        self.step(self.rd(acc=15))
+        self.assertEqual(self.kinds(), ["shares_stalled"])
+
+    def test_per_miner_shares_stall_override(self):
+        path = os.path.join(self.tmp, "override.yaml")
+        with open(path, "w", encoding="utf-8") as fh:
+            fh.write(
+                "poll_interval_seconds: 60\n"
+                "network: {enabled: false}\n"
+                "miners:\n"
+                "  - {name: B1, type: axeos, host: 192.168.1.53, shares_stall_minutes: 30}\n"
+            )
+        cfg = load_config(path)
+        msgs = []
+        mon = Monitor(cfg, self.store, lambda t, k, m: msgs.append((k, m, t)))
+        t = self.t
+
+        def step(acc, dt=60):
+            nonlocal t
+            t += dt
+            mon.process([self.rd(acc=acc)], t)
+
+        step(1)
+        for _ in range(29):
+            step(1)
+        self.assertNotIn("shares_stalled", [k for k, _, _ in msgs])
+        step(1)
+        self.assertEqual([k for k, _, _ in msgs].count("shares_stalled"), 1)
+        # The accepted counter moved ~31 min later, which would stretch the
+        # learned window to hours. The per-miner value still wins.
+        step(2, dt=60)
+        self.assertGreater(self.store.get("state:B1")["share_gap_s"], 30 * 60)
+        for _ in range(29):
+            step(2)
+        self.assertEqual([k for k, _, _ in msgs].count("shares_stalled"), 1)
+        step(2)
+        self.assertEqual([k for k, _, _ in msgs].count("shares_stalled"), 2)
+
+    def test_stall_message_uses_short_window_rate_and_rejected(self):
+        first = self.rd(acc=4, hr=100)
+        first.hashrate_ghs = 8000
+        first.hashrate_now_ghs = 1250
+        first.rejected = 1
+        self.step(first)
+        stuck = self.rd(acc=4, hr=100)
+        stuck.hashrate_ghs = 8000
+        stuck.hashrate_now_ghs = 1250
+        stuck.rejected = 4
+        for _ in range(20):
+            self.step(stuck)
+        text = [t for k, _, t in self.msgs if k == "shares_stalled"][-1]
+        self.assertIn("1.25 TH/s", text)
+        self.assertNotIn("8.00 TH/s", text)
+        self.assertIn("3 shares rejected since then", text)
+        phone = self.msgs[-1]
+        self.assertEqual(phone[0], "shares_stalled")
+
+    def test_stall_message_falls_back_when_short_window_missing(self):
+        first = self.rd(acc=5, hr=100)
+        first.hashrate_ghs = 1500
+        first.hashrate_now_ghs = None
+        first.rejected = 2
+        self.step(first)
+        stuck = self.rd(acc=5, hr=100)
+        stuck.hashrate_ghs = 1500
+        stuck.hashrate_now_ghs = None
+        stuck.rejected = 2
+        for _ in range(20):
+            self.step(stuck)
+        text = [t for k, _, t in self.msgs if k == "shares_stalled"][-1]
+        self.assertIn("1.50 TH/s", text)
+        self.assertIn("0 shares rejected since then", text)
+
+    def test_stall_message_keeps_a_zero_one_minute_rate(self):
+        first = self.rd(acc=7, hr=100)
+        first.hashrate_ghs = 5000
+        first.hashrate_now_ghs = 0
+        self.step(first)
+        stuck = self.rd(acc=7, hr=100)
+        stuck.hashrate_ghs = 5000
+        stuck.hashrate_now_ghs = 0
+        for _ in range(20):
+            self.step(stuck)
+        text = [t for k, _, t in self.msgs if k == "shares_stalled"][-1]
+        self.assertIn("0.0 GH/s", text)
+        self.assertNotIn("5.00 TH/s", text)
+
+    def test_counter_decrease_keeps_learned_gap_and_resets_timer(self):
+        self.step(self.rd(acc=1))
+        for n in range(2, 6):
+            self.step(self.rd(acc=n), dt=30 * 60)
+        self.step(self.rd(acc=1))  # reboot / pool switch drops the counter
+        for _ in range(20):
+            self.step(self.rd(acc=1))
+        self.assertNotIn("shares_stalled", self.kinds())
+        self.assertGreater(self.store.get("state:B1")["share_gap_s"], 20 * 60)
+
+
+class ShareStallFleetTests(unittest.TestCase):
+    def setUp(self):
+        self.tmp = tempfile.mkdtemp()
+        self.t = 1_700_000_000.0
+        self.msgs = []
+
+    def build(self, n):
+        lines = ["poll_interval_seconds: 60", "network: {enabled: false}", "miners:"]
+        for i in range(n):
+            lines.append(f"  - {{name: M{i}, type: axeos, host: 192.168.1.{10 + i}}}")
+        path = os.path.join(self.tmp, "c.yaml")
+        with open(path, "w", encoding="utf-8") as fh:
+            fh.write("\n".join(lines) + "\n")
+        cfg = load_config(path)
+        store = Store(os.path.join(self.tmp, "db.sqlite3"))
+        mon = Monitor(cfg, store, lambda t, k, m: self.msgs.append((k, m, t)))
+        return mon
+
+    def poll(self, mon, accepted, hr=1000.0):
+        self.t += 60
+        readings = []
+        for i, acc in enumerate(accepted):
+            r = Reading(f"M{i}", "axeos", f"192.168.1.{10 + i}", ok=True)
+            r.hashrate_ghs = r.hashrate_now_ghs = hr
+            r.temp_c, r.vr_temp_c, r.accepted, r.power_w = 60, 50, acc, 15.0
+            readings.append(r)
+        mon.process(readings, self.t)
+
+    def kinds(self):
+        return [k for k, _, _ in self.msgs]
+
+    def test_six_miners_stalling_together_one_fleet_alert(self):
+        mon = self.build(6)
+        frozen = [1] * 6
+        self.poll(mon, frozen)
+        for _ in range(19):
+            self.poll(mon, frozen)
+        self.assertFalse(any(k.startswith("shares_stall") for k in self.kinds()))
+        self.poll(mon, frozen)
+        self.assertEqual(self.kinds(), ["shares_stalled_fleet"])
+        text = self.msgs[-1][2]
+        self.assertIn("MANY MINERS NOT SUBMITTING", text)
+        self.assertIn("A shared cause is likely: pool, Farm Proxy, node or network.", text)
+        for i in range(6):
+            self.assertIn(f"M{i}", text)
+        self.assertIsNone(self.msgs[-1][1])
+        self.poll(mon, frozen)
+        self.assertEqual(self.kinds(), ["shares_stalled_fleet"])
+
+    def test_single_stalled_miner_gets_an_individual_alert(self):
+        mon = self.build(6)
+        for minute in range(21):
+            accepted = [1 if i == 0 else minute + 1 for i in range(6)]
+            self.poll(mon, accepted)
+        self.assertEqual(self.kinds(), ["shares_stalled"])
+        self.assertEqual(self.msgs[-1][1], "M0")
+        self.assertIn("HASHING BUT NOT SUBMITTING: M0", self.msgs[-1][2])
+        self.assertNotIn("MANY MINERS", self.msgs[-1][2])
+
+    def test_two_stalled_miners_stay_individual(self):
+        mon = self.build(6)
+        for minute in range(21):
+            accepted = [1 if i < 2 else minute + 1 for i in range(6)]
+            self.poll(mon, accepted)
+        self.assertEqual(self.kinds().count("shares_stalled"), 2)
+        self.assertNotIn("shares_stalled_fleet", self.kinds())
+
 
 if __name__ == "__main__":
     unittest.main()
