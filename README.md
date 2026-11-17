@@ -4,7 +4,7 @@ A self-hosted Telegram alert bot for home and solo Bitcoin miners. It watches yo
 
 Solo Miner Copilot runs as a single Docker container on your own node (such as Umbrel) or on any Linux box with Docker. Every 60 seconds it polls your miners' local APIs and stores their history in SQLite. It sends alerts and on-demand summaries to **your own** Telegram bot.
 
-> **Status:** beta (v1.3.5). See [Project status](#project-status).
+> **Status:** beta (v1.3.6). See [Project status](#project-status).
 
 ---
 
@@ -25,7 +25,7 @@ Your miners, IP addresses and stats stay on your own hardware. You create your o
   - Alerts have a 30-minute cooldown. Recovery is reported once the temperature is 5 °C below the limit.
   - Dual-ASIC Bitaxes use the hotter chip (`temp` and `temp2` from AxeOS). `/status` shows both, for example `ASIC 50/60°C`. The daily summary max is that hotter chip. A missing, zero, or null second temperature is ignored, so single-chip miners are unchanged.
 - **Hashrate drop:** alerts when a miner stays below 75% of its own 6-hour median hashrate for 10 minutes.
-- **Stalled shares:** alerts when a miner has had no new accepted shares for 20 minutes.
+- **Stalled shares:** alerts when accepted shares stop increasing. A fast miner still alerts after 20 minutes. A slow miner waits longer, up to 6 hours, based on how often that miner usually finds a share. Set `shares_stall_minutes` on a miner to choose its window. If at least 3 miners, and at least a quarter of the miners being tracked, stall within 15 minutes of each other, you get one fleet alert instead of one message per miner. The message uses the 1-minute hashrate, or the 10-minute rate when the 1-minute rate is missing, and how many shares were rejected.
 - **New best share:** tells you when a miner reports a higher share difficulty than before. That is a share record, not a confirmed block.
 - **Daily summary** at `daily_summary_time` (default 08:00 in your configured timezone). It includes:
   - total fleet hashrate
@@ -249,11 +249,12 @@ miners:
 | `thresholds.hashrate_drop_pct` | `75` | Percent of the miner's own median |
 | `thresholds.hashrate_drop_minutes` | `10` | |
 | `thresholds.hashrate_baseline_hours` | `6` | |
-| `thresholds.shares_stall_minutes` | `20` | |
+| `thresholds.shares_stall_minutes` | `20` | Minimum stall window. Slow miners wait longer, up to 6 hours. |
 | `network.enabled` / `mempool_base_url` / `refresh_minutes` | — | Network difficulty source. Can point at your own node's mempool app, e.g. `http://192.168.1.10:3006` |
 | `pool.enabled` / `host` / `port` | — | Optional local stratum port check |
 | `retention_days` | `8` | How much history is kept in SQLite |
-| `miners[]` | — | `name`, `type`, `host`, optional `port`, `temp_max_c`, `vr_temp_max_c`, `enabled: false`, `ps_power_index` (avalon), `fallback_http_port` |
+| `miners[].shares_stall_minutes` | — | Optional. Stall window for this miner only, in minutes. Overrides the learned window. |
+| `miners[]` | — | `name`, `type`, `host`, optional `port`, `temp_max_c`, `vr_temp_max_c`, `shares_stall_minutes`, `enabled: false`, `ps_power_index` (avalon), `fallback_http_port` |
 | `pool_watch.*` | off | See [Pool watch](#pool-watch-braiins-solo) |
 | `farm_proxy.*` | off | `enabled`, `urls`, `expected_connections`, `watch_workers`, … |
 
@@ -580,7 +581,7 @@ If you run Braiins Farm Proxy, enable `farm_proxy` in `config.yaml`. The bot rea
 git pull && sudo docker compose up -d --build
 ```
 
-**Already installed without git** (the Umbrel folder is not a checkout). For v1.3.5, refresh these app files from `main`, then rebuild. `config.yaml`, `.env` and `data/` stay put. There are no new Python packages.
+**Already installed without git** (the Umbrel folder is not a checkout). For v1.3.6, refresh these app files from `main`, then rebuild. `config.yaml`, `.env` and `data/` stay put. There are no new Python packages. You do not have to edit `config.yaml`. A miner can set `shares_stall_minutes` when you want its own stall window.
 
 ```bash
 cd ~/umbrel/home/solo-miner-copilot
@@ -591,11 +592,7 @@ curl -fsSL -o app/__init__.py https://raw.githubusercontent.com/gerrylove0820/so
 ```
 
 ```bash
-curl -fsSL -o app/main.py https://raw.githubusercontent.com/gerrylove0820/solo-miner-copilot/main/app/main.py
-```
-
-```bash
-curl -fsSL -o app/blockwatch.py https://raw.githubusercontent.com/gerrylove0820/solo-miner-copilot/main/app/blockwatch.py
+curl -fsSL -o app/engine.py https://raw.githubusercontent.com/gerrylove0820/solo-miner-copilot/main/app/engine.py
 ```
 
 ```bash
@@ -606,7 +603,7 @@ curl -fsSL -o app/ntfy.py https://raw.githubusercontent.com/gerrylove0820/solo-m
 sudo docker compose up -d --build
 ```
 
-Block alerts stay off until you set `BLOCK_WATCH`. See [Confirmed payout blocks](#confirmed-payout-blocks). Phone push and the status page are unchanged if you already set them.
+Share-stall alerts wait longer for a slow miner, and several miners stalling together raise one alert. Block alerts stay off until you set `BLOCK_WATCH`. See [Confirmed payout blocks](#confirmed-payout-blocks). Phone push and the status page are unchanged if you already set them.
 
 **Stop:**
 
@@ -663,7 +660,9 @@ The project is written for Python 3.12 and uses only the standard library plus P
 
 ## Project status
 
-**Beta (v1.3.5).** The author has tested it on a small home fleet of Bitaxe, NerdQAxe, Braiins BMM and Avalon devices. Other firmware versions may report fields differently, so some values may be missing or wrong on your hardware.
+**Beta (v1.3.6).** The author has tested it on a small home fleet of Bitaxe, NerdQAxe, Braiins BMM and Avalon devices. Other firmware versions may report fields differently, so some values may be missing or wrong on your hardware.
+
+**v1.3.6.** Share-stall alerts follow the miner. A fast miner still alerts after 20 minutes. A slow miner waits up to 6 hours, based on its own share gap, so a high-difficulty pool does not page you all day. Set `shares_stall_minutes` on a miner to pick the window yourself. When several miners stall within 15 minutes of each other, one alert names the likely shared cause (pool, Farm Proxy, node or network). The message shows the 1-minute hashrate and how many shares were rejected since the accepted counter froze.
 
 **v1.3.5.** Optional confirmed payout-block alerts from your own Bitcoin or Bitcoin Cash node. A match is a coinbase on the active chain paying your configured address. It does not name a miner. The first synced tip is a baseline. Reorgs get a follow-up. Off unless `BLOCK_WATCH=1`.
 

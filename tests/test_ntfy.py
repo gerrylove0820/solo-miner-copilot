@@ -17,6 +17,8 @@ from app.ntfy import (
     NtfySettings,
     msg_best_share,
     msg_offline,
+    msg_shares_stalled,
+    msg_shares_stalled_fleet,
     safe_name,
     sanitize,
     settings_from_env,
@@ -192,6 +194,27 @@ class PublishTests(unittest.TestCase):
             client.send_alert("OFFLINE: Bitaxe-1. Not responding for 4 polls in a row.", "offline")
         self.assertIn("queue is full", "\n".join(logs.output))
         self.assertNotIn(TOPIC, "\n".join(logs.output))
+
+    def test_fleet_stall_has_its_own_title_and_priority(self):
+        client = self.client(Opener())
+        client._thread = threading.current_thread()
+        client.send_alert(
+            "MANY MINERS NOT SUBMITTING: Bitaxe-1, Bitaxe-2, Bitaxe-3.",
+            "shares_stalled_fleet",
+        )
+        text, title, priority, kind = client._queue.get_nowait()
+        self.assertEqual(kind, "shares_stalled_fleet")
+        self.assertEqual(title, "Many miners not submitting")
+        self.assertEqual(priority, 5)
+        self.assertNotEqual(title, "Shares stalled")
+        phone = msg_shares_stalled_fleet(["Bitaxe-1", "192.168.1.50"])
+        self.assertIn("MANY MINERS NOT SUBMITTING: Bitaxe-1", phone)
+        self.assertNotIn("192.168.1.50", phone)
+        self.assertIn("pool, Farm Proxy, node or network", phone)
+        stalled = msg_shares_stalled("Bitaxe-1", 1250, 3)
+        self.assertIn("1.25 TH/s", stalled)
+        self.assertIn("3 shares rejected since then", stalled)
+        self.assertIn("0.0 GH/s", msg_shares_stalled("Bitaxe-1", 0, 0))
 
     def test_start_log_hides_the_topic(self):
         client = self.client(Opener())

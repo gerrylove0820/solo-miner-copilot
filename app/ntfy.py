@@ -51,6 +51,7 @@ _TITLES = {
     "hashrate_drop": "Hashrate drop",
     "hashrate_ok": "Hashrate recovered",
     "shares_stalled": "Shares stalled",
+    "shares_stalled_fleet": "Many miners not submitting",
     "shares_ok": "Shares flowing",
     "best_diff": "New best share",
     "block_active": "Payout block in chain",
@@ -63,6 +64,7 @@ _PRIORITY = {
     "overheat_vr": 4,
     "hashrate_drop": 4,
     "shares_stalled": 4,
+    "shares_stalled_fleet": 5,
     "best_diff": 3,
     "recovered": 3,
     "cooled_asic": 3,
@@ -164,9 +166,23 @@ def msg_hashrate_ok(name: str | None, now: float, median: float) -> str:
     return sanitize(f"HASHRATE RECOVERED: {safe_name(name)}. Now {fmt_hr(now)}, median {fmt_hr(median)}.")
 
 
-def msg_shares_stalled(name: str | None, hashrate: float | None) -> str:
-    rate = fmt_hr(hashrate) if hashrate else "an unknown rate"
-    return sanitize(f"SHARES STALLED: {safe_name(name)}. Still hashing at {rate}, but no new accepted shares.")
+def msg_shares_stalled(name: str | None, hashrate: float | None, rejected: int | None = None) -> str:
+    # Zero is a real 1-minute rate. Only a missing rate is "unknown".
+    rate = fmt_hr(hashrate) if hashrate is not None else "an unknown rate"
+    extra = ""
+    if rejected is not None:
+        n = int(rejected)
+        word = "share" if n == 1 else "shares"
+        extra = f" {n} {word} rejected since then."
+    return sanitize(
+        f"SHARES STALLED: {safe_name(name)}. Still hashing at {rate}, but no new accepted shares.{extra}")
+
+
+def msg_shares_stalled_fleet(names: list[str]) -> str:
+    listed = ", ".join(safe_name(n) for n in names)
+    return sanitize(
+        f"MANY MINERS NOT SUBMITTING: {listed}. "
+        f"A shared cause is likely: pool, Farm Proxy, node or network.")
 
 
 def msg_shares_ok(name: str | None) -> str:

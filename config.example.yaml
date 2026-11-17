@@ -36,7 +36,9 @@ thresholds:
   hashrate_baseline_hours: 6
   hashrate_baseline_min_minutes: 60  # need ~1h of history before drop alerts start
   hashrate_alert_cooldown_minutes: 60
-  shares_stall_minutes: 20         # accepted shares not increasing for 20 min -> alert
+  shares_stall_minutes: 20         # minimum with no accepted share before an alert.
+                                   # Slow miners wait longer (8x their usual gap, max 6 h).
+                                   # Optional per miner: shares_stall_minutes: 45
 
 network:                            # network difficulty, for solo-block odds in the summary
   enabled: true
@@ -57,8 +59,8 @@ retention_days: 8                   # how long history is kept in data/copilot.s
 #   nerdqaxe = NerdQAxe / NerdAxe (AxeOS-style API)
 #   braiins  = Braiins OS / BMM (cgminer-style API, port 4028)
 #   avalon   = Canaan Avalon Nano / Q (cgminer API, port 4028)
-# Optional per-miner keys: port, temp_max_c, vr_temp_max_c, enabled: false,
-#   ps_power_index (avalon), fallback_http_port (cgminer types, default 80)
+# Optional per-miner keys: port, temp_max_c, vr_temp_max_c, shares_stall_minutes,
+#   enabled: false, ps_power_index (avalon), fallback_http_port (cgminer types, default 80)
 # Tip: give your miners fixed IPs (DHCP reservations) in your router.
 miners:
   - {name: Bitaxe-1,      type: axeos,    host: 192.168.1.50}
